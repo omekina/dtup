@@ -53,7 +53,17 @@ impl From<Color> for Style {
     }
 }
 
-#[derive(Clone)]
+impl From<&Color> for Style {
+    fn from(value: &Color) -> Self {
+        Self {
+            color: Some(*value),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
     Blue,
+    Red,
 }

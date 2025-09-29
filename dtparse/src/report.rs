@@ -1,8 +1,11 @@
-use crate::styling::{Color, Style};
+use crate::{
+    pointer_stream::Pos,
+    styling::{Color, Style},
+};
 
 /// A report for an error, a warning, or a note
 pub trait Report {
-    fn segments(&self) -> &Vec<Box<dyn ReportSegment>>;
+    fn segments(&self) -> &[Box<dyn ReportSegment>];
 }
 
 /// A single segment for the report with one main message
@@ -18,16 +21,16 @@ pub trait ReportSegment {
     /// level and then on the start column level
     ///
     /// If not sorted - the display will be disjoint with possibly redundant file names
-    fn inline_messages(&self) -> &Vec<Box<dyn ReportInlineMessage>>;
+    fn inline_messages(&self) -> &[Box<dyn ReportInlineMessage>];
 }
 
 /// The main message of a report segment
 pub trait ReportSegmentMesssage {
-    fn display_type(&self) -> String;
-    fn message(&self) -> String;
-    fn color(&self) -> Color;
+    fn display_type(&self) -> &String;
+    fn message(&self) -> &String;
+    fn color(&self) -> &Color;
     /// Error/warning/info identifier (if any)
-    fn id(&self) -> Option<String>;
+    fn id(&self) -> &Option<String>;
 }
 
 /// A pointer to a file (based on path)
@@ -62,17 +65,9 @@ pub trait ReportInlineMessage {
     ///
     /// Overlaps are skipped.
     fn span(&self) -> &usize;
-    fn message(&self) -> &Option<String>;
+    fn message(&self) -> &str;
     fn underline_symbol(&self) -> &char;
-    fn style(&self) -> &Style;
-}
-
-trait ReportSingleLineMessage {
-    fn ptr(&self) -> &dyn ReportColPointer;
-    fn span(&self) -> &usize;
-    fn message(&self) -> &Option<String>;
-    fn underline_symbol(&self) -> &char;
-    fn style(&self) -> &Style;
+    fn color(&self) -> &Color;
 }
 
 pub trait FileReader {
@@ -262,7 +257,9 @@ impl InlineMessageDisplay<'_> {
         for message in messages.iter() {
             let end_ptr = message.ptr().col() + message.span();
             written += writer.write_rep(' ', message.ptr().col().saturating_sub(ptr))?
-                + writer.write_rep(*message.underline_symbol(), end_ptr.saturating_sub(ptr))?;
+                + Style::from(message.color()).bold().write(writer)?
+                + writer.write_rep(*message.underline_symbol(), end_ptr.saturating_sub(ptr))?
+                + Style::default().reset().write(writer)?;
             ptr = end_ptr;
         }
         written += writer.write("\n")?;
@@ -271,9 +268,8 @@ impl InlineMessageDisplay<'_> {
         for i in (0..messages.len()).rev() {
             written += Self::write_line_prefix(None, max_lineno_length, writer)?
                 + Self::write_ptr_lines(&messages[..i], writer)?;
-            if let Some((style, Some(message))) = messages.get(i).map(|v| (v.style(), v.message()))
-            {
-                written += style.write(writer)?
+            if let Some((color, message)) = messages.get(i).map(|v| (v.color(), v.message())) {
+                written += Style::from(color).bold().write(writer)?
                     + writer.write(message)?
                     + Style::default().reset().write(writer)?;
             }
@@ -290,9 +286,10 @@ impl InlineMessageDisplay<'_> {
         let mut written = 0;
         let mut ptr = 1;
         for message in messages.iter() {
-            written += message.style().write(writer)?
+            written += Style::from(message.color()).bold().write(writer)?
                 + writer.write_rep(' ', message.ptr().col().saturating_sub(ptr))?
-                + writer.write(" | ")?;
+                + writer.write(" | ")?
+                + Style::default().reset().write(writer)?;
             ptr = message.ptr().col() + 1;
         }
         Ok(written)
@@ -317,5 +314,150 @@ impl InlineMessageDisplay<'_> {
 
     fn prefix_style() -> Style {
         Style::from(Color::Blue).bold()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrimitiveMainMessage {
+    message: String,
+    display_type: String,
+    color: Color,
+    id: Option<String>,
+}
+
+impl PrimitiveMainMessage {
+    pub fn new(message: String, display_type: String, color: Color, id: Option<String>) -> Self {
+        Self {
+            message,
+            display_type,
+            color,
+            id,
+        }
+    }
+
+    pub fn error(message: String, id: String) -> Self {
+        Self::new(message, "error".to_string(), Color::Red, Some(id))
+    }
+}
+
+impl ReportSegmentMesssage for PrimitiveMainMessage {
+    fn message(&self) -> &String {
+        &self.message
+    }
+
+    fn display_type(&self) -> &String {
+        &self.display_type
+    }
+
+    fn color(&self) -> &Color {
+        &self.color
+    }
+
+    fn id(&self) -> &Option<String> {
+        &self.id
+    }
+}
+
+pub struct PrimitiveReport {
+    segments: Vec<Box<dyn ReportSegment>>,
+}
+
+impl PrimitiveReport {
+    pub fn new(segments: Vec<Box<dyn ReportSegment>>) -> Self {
+        Self { segments }
+    }
+
+    pub fn single(segment: PrimitiveReportSegment) -> Self {
+        Self::new(vec![Box::new(segment)])
+    }
+}
+
+impl Report for PrimitiveReport {
+    fn segments(&self) -> &[Box<dyn ReportSegment>] {
+        &self.segments
+    }
+}
+
+pub struct PrimitiveReportSegment {
+    main_message: Option<Box<dyn ReportSegmentMesssage>>,
+    messages: Vec<Box<dyn ReportInlineMessage>>,
+}
+
+impl PrimitiveReportSegment {
+    pub fn new(
+        main_message: Option<PrimitiveMainMessage>,
+        messages: Vec<Box<dyn ReportInlineMessage>>,
+    ) -> Self {
+        Self {
+            main_message: main_message.map(|v| Box::new(v) as Box<dyn ReportSegmentMesssage>),
+            messages,
+        }
+    }
+
+    pub fn single(main_message: PrimitiveMainMessage, message: PrimitiveReportMessage) -> Self {
+        Self::new(Some(main_message), vec![Box::new(message)])
+    }
+}
+
+impl ReportSegment for PrimitiveReportSegment {
+    fn main_message(&self) -> &Option<Box<dyn ReportSegmentMesssage>> {
+        &self.main_message
+    }
+
+    fn inline_messages(&self) -> &[Box<dyn ReportInlineMessage>] {
+        &self.messages
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrimitiveReportMessage {
+    message: String,
+    color: Color,
+    underline_symbol: char,
+    span: usize,
+    ptr: Pos,
+}
+
+impl PrimitiveReportMessage {
+    pub fn new(
+        message: String,
+        color: Color,
+        underline_symbol: char,
+        span: usize,
+        ptr: Pos,
+    ) -> Self {
+        Self {
+            message,
+            color,
+            underline_symbol,
+            span,
+            ptr,
+        }
+    }
+
+    pub fn error(message: String, span: usize, ptr: Pos) -> Self {
+        Self::new(message, Color::Red, '^', span, ptr)
+    }
+}
+
+impl ReportInlineMessage for PrimitiveReportMessage {
+    fn message(&self) -> &str {
+        &self.message
+    }
+
+    fn color(&self) -> &Color {
+        &self.color
+    }
+
+    fn span(&self) -> &usize {
+        &self.span
+    }
+
+    fn ptr(&self) -> &dyn ReportTextPointer {
+        &self.ptr
+    }
+
+    fn underline_symbol(&self) -> &char {
+        &self.underline_symbol
     }
 }

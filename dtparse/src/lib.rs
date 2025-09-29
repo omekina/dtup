@@ -23,6 +23,8 @@ impl AsRef<str> for MaybeOwnedString<'_> {
 
 pub type Error = Box<dyn std::error::Error>;
 
+mod errors;
+mod pointer_stream;
 mod report;
-mod styling;
 mod string;
+mod styling;
