@@ -125,7 +125,7 @@ impl<'a, I> PointerTracker<'a, I> {
         Self {
             source,
             file: file.into(),
-            line: 0,
+            line: 1,
             line_offset: 0,
             col: 0,
         }
@@ -140,8 +140,8 @@ impl<I: RawPointerStream + Iterator<Item = Result<Result<char, Utf8DecodingError
     fn next(&mut self) -> Option<Self::Item> {
         let ch = match self.source.next() {
             Some(Ok(Ok(v))) => v,
-            Some(Ok(Err(Utf8DecodingError { byte_count: span }))) => {
-                return Some(Ok(Err(self.decoding_error_report(span))));
+            Some(Ok(Err(Utf8DecodingError { .. }))) => {
+                return Some(Ok(Err(self.decoding_error_report())));
             }
             Some(Err(e)) => return Some(Err(e)),
             None => return None,
@@ -159,7 +159,9 @@ impl<I: RawPointerStream + Iterator<Item = Result<Result<char, Utf8DecodingError
 }
 
 impl<I: RawPointerStream> PointerTracker<'_, I> {
-    fn decoding_error_report(&self, span: usize) -> Box<dyn Report> {
+    fn decoding_error_report(&self) -> Box<dyn Report> {
+        let mut ptr = self.prev_ptr();
+        ptr.col += 1;
         Box::new(PrimitiveReport::single(PrimitiveReportSegment::single(
             PrimitiveMainMessage::error(
                 "invalid UTF-8 character".to_string(),
@@ -170,8 +172,8 @@ impl<I: RawPointerStream> PointerTracker<'_, I> {
                     "invalid byte encountered at offset `{}`",
                     self.source.prev_offset(),
                 ),
-                span,
-                self.prev_ptr(),
+                1,
+                ptr,
             ),
         )))
     }

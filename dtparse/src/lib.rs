@@ -49,7 +49,7 @@ mod report;
 mod string;
 mod styling;
 
+pub use file::{BasicFileReader, BasicFileStreamer};
+pub use pointer_stream::{PointerTracker, RawPointerTracker};
 pub use report::ReportDisplay;
-pub use file::{BasicFileStreamer, BasicFileReader};
 pub use string::StringDecoder;
-pub use pointer_stream::{RawPointerTracker, PointerTracker};

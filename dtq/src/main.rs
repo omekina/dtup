@@ -1,4 +1,4 @@
-use std::io::{stdout, BufWriter, Write};
+use std::io::{BufWriter, Write, stdout};
 
 use clap::Parser;
 
@@ -22,7 +22,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             dtparse::ReportDisplay::new(&*report).write(&mut reader, &mut stdout)?;
             stdout.flush()?;
             std::process::exit(1);
-        },
+        }
     };
     println!("ok: {:?}", res);
 

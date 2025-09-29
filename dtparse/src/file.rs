@@ -92,7 +92,11 @@ impl BasicFileReader {
                     break;
                 }
             }
-            res.extend_from_slice(&buf[0..trim_to]);
+            res.extend(
+                buf[0..trim_to]
+                    .iter()
+                    .map(|v| if v.is_ascii_control() { b' ' } else { *v }),
+            );
             read = file.read(&mut buf)?;
         }
         Ok(res)
@@ -177,7 +181,10 @@ impl BasicFileStreamer {
     }
 
     fn call_read(&mut self) -> Result<(), crate::Error> {
-        self.read = self.file.read(&mut self.buf).map_err(BasicFileStreamerError::ReadError)?;
+        self.read = self
+            .file
+            .read(&mut self.buf)
+            .map_err(BasicFileStreamerError::ReadError)?;
         self.ptr = 0;
         Ok(())
     }

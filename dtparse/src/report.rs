@@ -186,7 +186,14 @@ impl SegmentDisplay<'_> {
 
             // write disjoint segment
             if prev.file != file || prev.line.line() > line {
-                written += Self::write_filepath(&prev.file, prev.max_lineno_length, writer)?
+                written += Self::write_filepath(
+                    &prev.file,
+                    *prev.line.line(),
+                    *prev.line.col(),
+                    prev.max_lineno_length,
+                    writer,
+                )? + Self::write_line_prefix(None, prev.max_lineno_length, writer)?
+                    + writer.write("\n")?
                     + Self::write_line(
                         prev.line,
                         &source[prev.first_ptr..i],
@@ -210,7 +217,14 @@ impl SegmentDisplay<'_> {
 
         // write remaining
         if let Some(prev) = prev {
-            written += Self::write_filepath(&prev.file, prev.max_lineno_length, writer)?
+            written += Self::write_filepath(
+                &prev.file,
+                *prev.line.line(),
+                *prev.line.col(),
+                prev.max_lineno_length,
+                writer,
+            )? + Self::write_line_prefix(None, prev.max_lineno_length, writer)?
+                + writer.write("\n")?
                 + Self::write_line(
                     prev.line,
                     &source[prev.first_ptr..],
@@ -238,6 +252,8 @@ impl SegmentDisplay<'_> {
 
     fn write_filepath(
         filepath: &std::path::Path,
+        line: usize,
+        col: usize,
         line_number_length: usize,
         writer: &mut impl DisplayWriter,
     ) -> Result<usize, crate::Error> {
@@ -249,6 +265,10 @@ impl SegmentDisplay<'_> {
                 std::io::ErrorKind::InvalidData,
                 "could not convert filepath to string",
             ))?)?
+            + writer.write(":")?
+            + writer.write(line.to_string())?
+            + writer.write(":")?
+            + writer.write(col.to_string())?
             + writer.write("\n")?)
     }
 
@@ -275,9 +295,10 @@ impl SegmentDisplay<'_> {
         let mut ptr = 1;
         for message in messages.iter() {
             let end_ptr = message.ptr().col() + message.span();
+            let span = end_ptr.saturating_sub(std::cmp::max(ptr, *message.ptr().col()));
             written += writer.write_rep(' ', message.ptr().col().saturating_sub(ptr))?
                 + Style::from(message.color()).bold().write(writer)?
-                + writer.write_rep(*message.underline_symbol(), end_ptr.saturating_sub(ptr))?
+                + writer.write_rep(*message.underline_symbol(), span)?
                 + Style::default().reset().write(writer)?;
             ptr = end_ptr;
         }
@@ -286,7 +307,7 @@ impl SegmentDisplay<'_> {
         // pointers and messages
         for i in (0..messages.len()).rev() {
             written += Self::write_line_prefix(None, max_lineno_length, writer)?
-                + Self::write_ptr_lines(&messages[..i], writer)?;
+                + Self::write_ptr_lines(&messages, writer)?;
             if let Some((color, message)) = messages.get(i).map(|v| (v.color(), v.message())) {
                 written += Style::from(color).bold().write(writer)?
                     + writer.write(message)?
@@ -304,13 +325,23 @@ impl SegmentDisplay<'_> {
     ) -> Result<usize, crate::Error> {
         let mut written = 0;
         let mut ptr = 1;
-        for message in messages.iter() {
+        for message in messages.iter().take(messages.len().saturating_sub(1)) {
             written += Style::from(message.color()).bold().write(writer)?
                 + writer.write_rep(' ', message.ptr().col().saturating_sub(ptr))?
                 + writer.write(" | ")?
                 + Style::default().reset().write(writer)?;
             ptr = message.ptr().col() + 1;
         }
+        let space = match messages.len() {
+            0 => 0,
+            1 => *messages[0].ptr().col(),
+            l @ 2.. => messages[l - 1]
+                .ptr()
+                .col()
+                .saturating_sub(*messages[l - 2].ptr().col()),
+        }
+        .saturating_sub(1);
+        written += writer.write_rep(' ', space)?;
         Ok(written)
     }
 
@@ -328,6 +359,7 @@ impl SegmentDisplay<'_> {
                 }
                 None => writer.write_rep(' ', number_length)?,
             }
+            + writer.write(" | ")?
             + Style::default().reset().write(writer)?)
     }
 

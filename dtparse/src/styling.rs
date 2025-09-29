@@ -24,6 +24,10 @@ impl Style {
         self.styles & style.value() > 0
     }
 
+    pub const fn remove_reset(&mut self) {
+        self.styles &= 0b11111110;
+    }
+
     pub const fn reset(mut self) -> Self {
         self.color = None;
         self.styles = Styles::Reset.value();
@@ -31,13 +35,32 @@ impl Style {
     }
 
     pub const fn bold(mut self) -> Self {
+        self.remove_reset();
         self.styles |= Styles::Bold.value();
         self
     }
 
+    const fn ansi_inner(&self) -> &str {
+        match self.styles {
+            0b1 => "0",
+            0b10 => "1",
+            _ => unreachable!(),
+        }
+    }
+
+    fn write_color(&self, writer: &mut impl crate::DisplayWriter) -> Result<usize, crate::Error> {
+        Ok(match (self.color, self.styles & 0b1) {
+            (Some(color), 0b0) => writer.write(";")? + writer.write(color.ansi_inner())?,
+            _ => 0,
+        })
+    }
+
     /// Write with this style
-    pub fn write(&self, _writer: &mut impl crate::DisplayWriter) -> Result<usize, crate::Error> {
-        Ok(0)
+    pub fn write(&self, writer: &mut impl crate::DisplayWriter) -> Result<usize, crate::Error> {
+        Ok(writer.write("\x1b[")?
+            + writer.write(self.ansi_inner())?
+            + self.write_color(writer)?
+            + writer.write("m")?)
     }
 }
 
@@ -61,6 +84,23 @@ impl From<&Color> for Style {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
-    Blue,
     Red,
+    Green,
+    Yellow,
+    Blue,
+    Purple,
+    Cyan,
+}
+
+impl Color {
+    const fn ansi_inner(&self) -> &str {
+        match self {
+            Self::Red => "31",
+            Self::Green => "32",
+            Self::Yellow => "33",
+            Self::Blue => "34",
+            Self::Purple => "35",
+            Self::Cyan => "36",
+        }
+    }
 }
