@@ -1,11 +1,11 @@
 #[derive(PartialEq, Eq, Clone, Copy)]
-enum Styles {
+pub enum Styles {
     Reset,
     Bold,
 }
 
 impl Styles {
-    const fn value(&self) -> u8 {
+    pub const fn value(&self) -> u8 {
         match self {
             Self::Reset => 0b1,
             Self::Bold => 0b10,
@@ -36,10 +36,7 @@ impl Style {
     }
 
     /// Write with this style
-    pub fn write(
-        &self,
-        _writer: &mut impl crate::report::DisplayWriter,
-    ) -> Result<usize, crate::Error> {
+    pub fn write(&self, _writer: &mut impl crate::DisplayWriter) -> Result<usize, crate::Error> {
         Ok(0)
     }
 }

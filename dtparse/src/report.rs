@@ -1,4 +1,6 @@
 use crate::{
+    DisplayWriter,
+    file::FileReader,
     pointer_stream::Pos,
     styling::{Color, Style},
 };
@@ -70,19 +72,6 @@ pub trait ReportInlineMessage {
     fn color(&self) -> &Color;
 }
 
-pub trait FileReader {
-    /// This must not return any newlines in the result
-    fn read_line(
-        &mut self,
-        line: &dyn ReportFilePointer,
-    ) -> Result<crate::MaybeOwnedString, crate::Error>;
-}
-
-pub trait DisplayWriter {
-    fn write(&mut self, to_write: impl AsRef<str>) -> Result<usize, crate::Error>;
-    fn write_rep(&mut self, to_write: char, repeat: usize) -> Result<usize, crate::Error>;
-}
-
 #[cfg(test)]
 #[derive(Default)]
 pub struct BufWriter {
@@ -104,17 +93,47 @@ impl DisplayWriter for BufWriter {
     }
 }
 
-pub struct InlineMessageDisplay<'a> {
+pub struct ReportDisplay<'a> {
+    report: &'a dyn Report,
+}
+
+impl<'a> ReportDisplay<'a> {
+    pub fn new(report: &'a dyn Report) -> Self {
+        Self { report }
+    }
+}
+
+impl ReportDisplay<'_> {
+    pub fn write(
+        &self,
+        file_reader: &mut impl FileReader,
+        writer: &mut impl DisplayWriter,
+    ) -> Result<usize, crate::Error> {
+        let segments = self.report.segments();
+        let mut written = 0;
+        let mut first = true;
+        for segment in segments.iter() {
+            if !first {
+                written += writer.write("\n")?;
+            }
+            first = false;
+            written += SegmentDisplay::new(segment.as_ref()).write(file_reader, writer)?;
+        }
+        Ok(written)
+    }
+}
+
+struct SegmentDisplay<'a> {
     segment: &'a dyn ReportSegment,
 }
 
-impl<'a> InlineMessageDisplay<'a> {
-    pub fn new(segment: &'a dyn ReportSegment) -> Self {
+impl<'a> SegmentDisplay<'a> {
+    fn new(segment: &'a dyn ReportSegment) -> Self {
         Self { segment }
     }
 }
 
-impl InlineMessageDisplay<'_> {
+impl SegmentDisplay<'_> {
     fn write(
         &self,
         file_reader: &mut impl FileReader,
@@ -246,7 +265,7 @@ impl InlineMessageDisplay<'_> {
         let mut written = 0;
 
         // raw line and line number
-        let raw_line = file_reader.read_line(line)?;
+        let raw_line = file_reader.read_line_lossy(line)?;
         written += Self::write_line_prefix(Some(*line.line()), max_lineno_length, writer)?
             + writer.write(&raw_line)?
             + writer.write("\n")?

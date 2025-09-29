@@ -111,7 +111,7 @@ impl<I> RawPointerStream for RawPointerTracker<'_, I> {
 /// Will keep track of the position within the text and will transform the nested (inner) error
 /// into a report.
 #[derive(Debug)]
-struct PointerTracker<'a, I> {
+pub struct PointerTracker<'a, I> {
     source: &'a mut I,
     file: Rc<PathBuf>,
     line: usize,
