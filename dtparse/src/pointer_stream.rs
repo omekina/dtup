@@ -1,9 +1,9 @@
 use crate::{
-    errors::Errors,
     report::{
         PrimitiveMainMessage, PrimitiveReport, PrimitiveReportMessage, PrimitiveReportSegment,
         Report, ReportColPointer, ReportFilePointer, ReportLinePointer, ReportTextPointer,
     },
+    result::{Errors, IoError, ParseErrorReport, StreamResult},
     string::Utf8DecodingError,
 };
 use std::{
@@ -82,8 +82,8 @@ impl<'a, I> RawPointerTracker<'a, I> {
     }
 }
 
-impl<'a, I: Iterator<Item = Result<u8, crate::Error>>> Iterator for RawPointerTracker<'a, I> {
-    type Item = Result<u8, crate::Error>;
+impl<'a, I: Iterator<Item = Result<u8, IoError>>> Iterator for RawPointerTracker<'a, I> {
+    type Item = Result<u8, IoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let b = match self.source.next() {
@@ -132,19 +132,20 @@ impl<'a, I> PointerTracker<'a, I> {
     }
 }
 
-impl<I: RawPointerStream + Iterator<Item = Result<Result<char, Utf8DecodingError>, crate::Error>>>
-    Iterator for PointerTracker<'_, I>
+type PointerTrackerSourceItem = Result<Result<char, Utf8DecodingError>, IoError>;
+
+impl<I: Iterator<Item = PointerTrackerSourceItem> + RawPointerStream> Iterator
+    for PointerTracker<'_, I>
 {
-    type Item = Result<Result<char, Box<dyn Report>>, crate::Error>;
+    type Item = StreamResult<char, ParseErrorReport>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let ch = match self.source.next() {
-            Some(Ok(Ok(v))) => v,
-            Some(Ok(Err(Utf8DecodingError { .. }))) => {
-                return Some(Ok(Err(self.decoding_error_report())));
+        let ch = match self.source.next()? {
+            Ok(Ok(v)) => v,
+            Ok(Err(Utf8DecodingError { .. })) => {
+                return Some(StreamResult::ProcessingError(self.decoding_error_report()));
             }
-            Some(Err(e)) => return Some(Err(e)),
-            None => return None,
+            Err(e) => return Some(StreamResult::IoError(e)),
         };
         if self.col == 0 {
             self.line_offset = self.source.prev_offset();
@@ -154,7 +155,7 @@ impl<I: RawPointerStream + Iterator<Item = Result<Result<char, Utf8DecodingError
             self.line += 1;
             self.col = 0;
         }
-        Some(Ok(Ok(ch)))
+        Some(StreamResult::Ok(ch))
     }
 }
 

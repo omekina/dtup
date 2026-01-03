@@ -5,14 +5,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{MaybeOwnedString, report::ReportTextPointer};
+use crate::{MaybeOwnedString, report::ReportTextPointer, result::IoError};
 
 pub trait FileReader {
     /// This must not return any newlines in the result
     fn read_line_lossy<'a>(
         &'a mut self,
         line: &dyn ReportTextPointer,
-    ) -> Result<MaybeOwnedString<'a>, crate::Error>;
+    ) -> Result<MaybeOwnedString<'a>, IoError>;
 }
 
 #[derive(Debug)]
@@ -60,17 +60,17 @@ pub struct BasicFileReader {
 }
 
 impl BasicFileReader {
-    fn open(file: &Path) -> Result<File, crate::Error> {
+    fn open(file: &Path) -> Result<File, IoError> {
         Ok(File::open(file).map_err(BasicFileReaderError::OpenError)?)
     }
 
-    fn seek(file: &mut File, offset: usize) -> Result<(), crate::Error> {
+    fn seek(file: &mut File, offset: usize) -> Result<(), IoError> {
         file.seek(SeekFrom::Start(offset.try_into()?))
             .map_err(BasicFileReaderError::FSeekError)?;
         Ok(())
     }
 
-    fn read_line(file: &mut File) -> Result<String, crate::Error> {
+    fn read_line(file: &mut File) -> Result<String, IoError> {
         Ok(String::from_utf8_lossy(
             &Self::read_until(file, |b| b != b'\n').map_err(BasicFileReaderError::ReadLine)?,
         )
@@ -107,7 +107,7 @@ impl FileReader for BasicFileReader {
     fn read_line_lossy<'a>(
         &'a mut self,
         line: &dyn ReportTextPointer,
-    ) -> Result<MaybeOwnedString<'a>, crate::Error> {
+    ) -> Result<MaybeOwnedString<'a>, IoError> {
         let file = line.file();
         let mut file = match self.handles.get_mut(file) {
             Some(v) => v,
@@ -171,7 +171,7 @@ pub struct BasicFileStreamer {
 }
 
 impl BasicFileStreamer {
-    pub fn new(file: &Path) -> Result<Self, crate::Error> {
+    pub fn new(file: &Path) -> Result<Self, IoError> {
         Ok(Self {
             file: File::open(file).map_err(BasicFileStreamerError::OpenError)?,
             ptr: 0,
@@ -180,7 +180,7 @@ impl BasicFileStreamer {
         })
     }
 
-    fn call_read(&mut self) -> Result<(), crate::Error> {
+    fn call_read(&mut self) -> Result<(), IoError> {
         self.read = self
             .file
             .read(&mut self.buf)
@@ -189,7 +189,7 @@ impl BasicFileStreamer {
         Ok(())
     }
 
-    fn read_byte(&mut self) -> Result<Option<u8>, crate::Error> {
+    fn read_byte(&mut self) -> Result<Option<u8>, IoError> {
         if self.ptr >= self.read {
             self.call_read()?;
         }
@@ -204,7 +204,7 @@ impl BasicFileStreamer {
 }
 
 impl Iterator for BasicFileStreamer {
-    type Item = Result<u8, crate::Error>;
+    type Item = Result<u8, IoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.read_byte() {

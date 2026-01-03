@@ -1,4 +1,4 @@
-use crate::pointer_stream::RawPointerStream;
+use crate::{pointer_stream::RawPointerStream, result::IoError};
 
 #[derive(Debug, Clone)]
 pub struct Utf8DecodingError {
@@ -16,8 +16,13 @@ impl<'a, I> StringDecoder<'a, I> {
     }
 }
 
-impl<I: Iterator<Item = Result<u8, crate::Error>>> Iterator for StringDecoder<'_, I> {
-    type Item = Result<Result<char, Utf8DecodingError>, crate::Error>;
+pub trait StringSourceStream: Iterator<Item = Result<u8, IoError>> {}
+impl<I: Iterator<Item = Result<u8, IoError>>> StringSourceStream for I {}
+
+pub type StringDecoderOutputStream = Result<Result<char, Utf8DecodingError>, IoError>;
+
+impl<I: StringSourceStream> Iterator for StringDecoder<'_, I> {
+    type Item = StringDecoderOutputStream;
 
     fn next(&mut self) -> Option<Self::Item> {
         macro_rules! yeet {
@@ -78,11 +83,11 @@ impl<I: RawPointerStream> RawPointerStream for StringDecoder<'_, I> {
     }
 }
 
-impl<I: Iterator<Item = Result<u8, crate::Error>>> StringDecoder<'_, I> {
+impl<I: Iterator<Item = Result<u8, IoError>>> StringDecoder<'_, I> {
     /// Return an unmasked valid continuation bytes or an error.
     fn req_continuation_bytes<const COUNT: usize>(
         &mut self,
-    ) -> Result<Result<[u8; COUNT], usize>, crate::Error> {
+    ) -> Result<Result<[u8; COUNT], usize>, IoError> {
         let mut res = [0; COUNT];
         for i in 0..COUNT {
             let ch = match self.source.next() {
@@ -113,5 +118,16 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(res, target);
+    }
+
+    #[test]
+    fn invalid_string() {
+        let target = [0x80u8];
+        let mut bytes = target.iter().map(|v| Ok(*v));
+        let decoder = StringDecoder::new(&mut bytes);
+        let res = decoder
+            .collect::<Result<Result<Vec<char>, _>, _>>()
+            .unwrap();
+        assert!(res.is_err());
     }
 }

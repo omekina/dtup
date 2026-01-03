@@ -2,18 +2,19 @@ use crate::{
     DisplayWriter,
     file::FileReader,
     pointer_stream::Pos,
+    result::IoError,
     styling::{Color, Style},
 };
 
 /// A report for an error, a warning, or a note
-pub trait Report {
+pub trait Report: std::fmt::Debug {
     fn segments(&self) -> &[Box<dyn ReportSegment>];
 }
 
 /// A single segment for the report with one main message
 ///
 /// This can contain multiple inline messages (for different files or lines)
-pub trait ReportSegment {
+pub trait ReportSegment: std::fmt::Debug {
     /// The main message for this segment
     /// This should be displayed at the start of the segment display
     fn main_message(&self) -> &Option<Box<dyn ReportSegmentMesssage>>;
@@ -27,7 +28,7 @@ pub trait ReportSegment {
 }
 
 /// The main message of a report segment
-pub trait ReportSegmentMesssage {
+pub trait ReportSegmentMesssage: std::fmt::Debug {
     fn display_type(&self) -> &String;
     fn message(&self) -> &String;
     fn color(&self) -> &Color;
@@ -60,7 +61,7 @@ pub trait ReportColPointer {
 pub trait ReportTextPointer: ReportFilePointer + ReportLinePointer + ReportColPointer {}
 
 /// Message with exact location, length and style
-pub trait ReportInlineMessage {
+pub trait ReportInlineMessage: std::fmt::Debug {
     fn ptr(&self) -> &dyn ReportTextPointer;
     /// The length of the underlined text in columns/characters/bytes
     /// This should not exceed the line - or it will overflow the line length when displaying.
@@ -80,12 +81,12 @@ pub struct BufWriter {
 
 #[cfg(test)]
 impl DisplayWriter for BufWriter {
-    fn write(&mut self, to_write: impl AsRef<str>) -> Result<usize, crate::Error> {
+    fn write(&mut self, to_write: impl AsRef<str>) -> Result<usize, IoError> {
         self.buf.push_str(to_write.as_ref());
         Ok(to_write.as_ref().len())
     }
 
-    fn write_rep(&mut self, to_write: char, repeat: usize) -> Result<usize, crate::Error> {
+    fn write_rep(&mut self, to_write: char, repeat: usize) -> Result<usize, IoError> {
         for _ in 0..repeat {
             self.buf.push(to_write);
         }
@@ -108,7 +109,7 @@ impl ReportDisplay<'_> {
         &self,
         file_reader: &mut impl FileReader,
         writer: &mut impl DisplayWriter,
-    ) -> Result<usize, crate::Error> {
+    ) -> Result<usize, IoError> {
         let segments = self.report.segments();
         let mut written = 0;
         let mut first = true;
@@ -138,7 +139,7 @@ impl SegmentDisplay<'_> {
         &self,
         file_reader: &mut impl FileReader,
         writer: &mut impl DisplayWriter,
-    ) -> Result<usize, crate::Error> {
+    ) -> Result<usize, IoError> {
         let mut written = 0;
         if let Some(main_message) = self.segment.main_message() {
             written += Style::from(main_message.color()).bold().write(writer)?
@@ -162,7 +163,7 @@ impl SegmentDisplay<'_> {
         &self,
         file_reader: &mut impl FileReader,
         writer: &mut impl DisplayWriter,
-    ) -> Result<usize, crate::Error> {
+    ) -> Result<usize, IoError> {
         let source = self.segment.inline_messages();
         struct Prev<'a> {
             file: std::path::PathBuf,
@@ -256,7 +257,7 @@ impl SegmentDisplay<'_> {
         col: usize,
         line_number_length: usize,
         writer: &mut impl DisplayWriter,
-    ) -> Result<usize, crate::Error> {
+    ) -> Result<usize, IoError> {
         Ok(Self::prefix_style().write(writer)?
             + writer.write_rep(' ', line_number_length)?
             + writer.write("--> ")?
@@ -281,7 +282,7 @@ impl SegmentDisplay<'_> {
         max_lineno_length: usize,
         file_reader: &mut impl FileReader,
         writer: &mut impl DisplayWriter,
-    ) -> Result<usize, crate::Error> {
+    ) -> Result<usize, IoError> {
         let mut written = 0;
 
         // raw line and line number
@@ -322,7 +323,7 @@ impl SegmentDisplay<'_> {
     fn write_ptr_lines(
         messages: &[Box<dyn ReportInlineMessage>],
         writer: &mut impl DisplayWriter,
-    ) -> Result<usize, crate::Error> {
+    ) -> Result<usize, IoError> {
         let mut written = 0;
         let mut ptr = 1;
         for message in messages.iter().take(messages.len().saturating_sub(1)) {
@@ -349,7 +350,7 @@ impl SegmentDisplay<'_> {
         line_number: Option<usize>,
         number_length: usize,
         writer: &mut impl DisplayWriter,
-    ) -> Result<usize, crate::Error> {
+    ) -> Result<usize, IoError> {
         Ok(Self::prefix_style().write(writer)?
             + match line_number {
                 Some(line_number) => {
@@ -409,6 +410,7 @@ impl ReportSegmentMesssage for PrimitiveMainMessage {
     }
 }
 
+#[derive(Debug)]
 pub struct PrimitiveReport {
     segments: Vec<Box<dyn ReportSegment>>,
 }
@@ -429,6 +431,7 @@ impl Report for PrimitiveReport {
     }
 }
 
+#[derive(Debug)]
 pub struct PrimitiveReportSegment {
     main_message: Option<Box<dyn ReportSegmentMesssage>>,
     messages: Vec<Box<dyn ReportInlineMessage>>,

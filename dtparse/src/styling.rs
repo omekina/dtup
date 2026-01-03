@@ -1,3 +1,5 @@
+use crate::result::IoError;
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Styles {
     Reset,
@@ -48,7 +50,7 @@ impl Style {
         }
     }
 
-    fn write_color(&self, writer: &mut impl crate::DisplayWriter) -> Result<usize, crate::Error> {
+    fn write_color(&self, writer: &mut impl crate::DisplayWriter) -> Result<usize, IoError> {
         Ok(match (self.color, self.styles & 0b1) {
             (Some(color), 0b0) => writer.write(";")? + writer.write(color.ansi_inner())?,
             _ => 0,
@@ -56,7 +58,7 @@ impl Style {
     }
 
     /// Write with this style
-    pub fn write(&self, writer: &mut impl crate::DisplayWriter) -> Result<usize, crate::Error> {
+    pub fn write(&self, writer: &mut impl crate::DisplayWriter) -> Result<usize, IoError> {
         Ok(writer.write("\x1b[")?
             + writer.write(self.ansi_inner())?
             + self.write_color(writer)?

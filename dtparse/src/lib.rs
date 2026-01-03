@@ -1,14 +1,18 @@
+mod result;
+
+use result::IoError;
+
 pub trait DisplayWriter {
-    fn write(&mut self, to_write: impl AsRef<str>) -> Result<usize, crate::Error>;
-    fn write_rep(&mut self, to_write: char, repeat: usize) -> Result<usize, crate::Error>;
+    fn write(&mut self, to_write: impl AsRef<str>) -> Result<usize, IoError>;
+    fn write_rep(&mut self, to_write: char, repeat: usize) -> Result<usize, IoError>;
 }
 
 impl DisplayWriter for std::io::BufWriter<std::io::Stdout> {
-    fn write(&mut self, to_write: impl AsRef<str>) -> Result<usize, crate::Error> {
+    fn write(&mut self, to_write: impl AsRef<str>) -> Result<usize, IoError> {
         Ok(std::io::Write::write(self, to_write.as_ref().as_bytes())?)
     }
 
-    fn write_rep(&mut self, to_write: char, repeat: usize) -> Result<usize, crate::Error> {
+    fn write_rep(&mut self, to_write: char, repeat: usize) -> Result<usize, IoError> {
         let mut to_write_full = String::with_capacity(repeat * to_write.len_utf8());
         for _ in 0..repeat {
             to_write_full.push(to_write);
@@ -40,16 +44,13 @@ impl AsRef<str> for MaybeOwnedString<'_> {
     }
 }
 
-pub type Error = Box<dyn std::error::Error>;
-
-mod errors;
 mod file;
+mod helpers;
 mod pointer_stream;
 mod report;
+mod stream_utils;
 mod string;
 mod styling;
+mod tokenizer;
 
-pub use file::{BasicFileReader, BasicFileStreamer};
-pub use pointer_stream::{PointerTracker, RawPointerTracker};
-pub use report::ReportDisplay;
-pub use string::StringDecoder;
+pub use helpers::parse;
