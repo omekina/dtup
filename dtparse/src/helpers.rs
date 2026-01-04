@@ -2,13 +2,13 @@ use std::{fs::File, io::Read, path::Path};
 
 use crate::{
     pointer_stream::{PointerTracker, RawPointerTracker},
-    result::{IoError, ParseErrorReport, StreamResult},
+    result::{IoError, ParseErrorReport, StreamResult, StreamedError},
     stream_utils::PrependableStream,
     string::StringDecoder,
-    tokenizer::{Token, Tokenizer},
+    tokenizer::{SpanToken, Tokenizer},
 };
 
-pub fn parse(filepath: &Path) -> StreamResult<Vec<Token>, ParseErrorReport> {
+pub fn parse(filepath: &Path) -> StreamResult<Vec<SpanToken>, StreamedError<ParseErrorReport>> {
     let file = match File::open(filepath) {
         Ok(v) => v,
         Err(e) => return StreamResult::IoError(e.into()),

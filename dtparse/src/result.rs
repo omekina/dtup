@@ -3,12 +3,23 @@ use crate::report::Report;
 pub enum Errors {
     /// An invalid byte was encountered - resulting in an invalid UTF-8 character.
     InvalidUtf8Character,
+    /// Invalid symbol inside a numeric literal
+    InvalidNumericLiteral,
 }
 
 impl Errors {
+    pub fn message(&self) -> String {
+        match self {
+            Self::InvalidUtf8Character => "invalid UTF-8 character",
+            Self::InvalidNumericLiteral => "invalid numeric literal",
+        }
+        .to_string()
+    }
+
     pub fn id(&self) -> String {
         match self {
             Self::InvalidUtf8Character => "E001".to_string(),
+            Self::InvalidNumericLiteral => "E002".to_string(),
         }
     }
 }
@@ -26,6 +37,7 @@ impl<E: std::error::Error + 'static> From<E> for IoError {
     }
 }
 
+#[derive(Debug)]
 pub enum StreamedError<E> {
     CanContinue(E),
     ShouldEnd(E),
@@ -42,7 +54,7 @@ pub enum StreamResult<T, E> {
 }
 
 impl<A, E> StreamResult<A, E> {
-    pub fn map<B>(self, mapper: impl Fn(A) -> B) -> StreamResult<B, E> {
+    pub fn map<B>(self, mapper: impl FnOnce(A) -> B) -> StreamResult<B, E> {
         match self {
             Self::Ok(v) => StreamResult::Ok(mapper(v)),
             Self::IoError(e) => StreamResult::IoError(e),

@@ -4,12 +4,22 @@ pub(crate) trait StreamPrepend<T> {
     /// Pushes an element into the backlog.
     ///
     /// This element will be returned if `.next()` is called directly after.
+    ///
+    /// # Panics
+    /// If the backlog has insufficient size.
     fn push(&mut self, value: T);
+}
+
+pub(crate) trait PrependablePointer {
+    /// # Panics
+    /// Will panic if backlog is not empty.
+    fn last_ptr(&self) -> Pos;
 }
 
 pub(crate) struct PrependableStream<T, I, const BACKLOG_SIZE: usize> {
     source: I,
     backlog: Vec<T>,
+    has_ended: bool,
 }
 
 impl<T, I, const BACKLOG_SIZE: usize> PrependableStream<T, I, BACKLOG_SIZE> {
@@ -17,6 +27,7 @@ impl<T, I, const BACKLOG_SIZE: usize> PrependableStream<T, I, BACKLOG_SIZE> {
         Self {
             source,
             backlog: Vec::with_capacity(BACKLOG_SIZE),
+            has_ended: false,
         }
     }
 
@@ -28,8 +39,28 @@ impl<T, I, const BACKLOG_SIZE: usize> PrependableStream<T, I, BACKLOG_SIZE> {
     }
 }
 
+impl<T, I, const BACKLOG_SIZE: usize> PrependableStream<T, I, BACKLOG_SIZE>
+where
+    I: Iterator<Item = T>,
+{
+    /// Awoids re-polling the source if it has already ended
+    fn get_from_source(&mut self) -> Option<T> {
+        if self.has_ended {
+            return None;
+        }
+        let next = self.source.next();
+        if let None = next {
+            self.has_ended = true;
+        }
+        next
+    }
+}
+
 impl<T, I, const BACKLOG_SIZE: usize> StreamPrepend<T> for PrependableStream<T, I, BACKLOG_SIZE> {
     fn push(&mut self, value: T) {
+        if self.backlog.len() == BACKLOG_SIZE {
+            panic!("tried to push to a full backlog");
+        }
         self.backlog.push(value);
     }
 }
@@ -42,15 +73,15 @@ impl<T, I: Iterator<Item = T>, const BACKLOG_SIZE: usize> Iterator
     fn next(&mut self) -> Option<Self::Item> {
         match self.get_from_backlog() {
             v @ Some(_) => v,
-            None => self.source.next(),
+            None => self.get_from_source(),
         }
     }
 }
 
-impl<T, I: PointerStream, const BACKLOG_SIZE: usize> PrependableStream<T, I, BACKLOG_SIZE> {
-    /// # Panics
-    /// Will panic if backlog is not empty.
-    pub(crate) fn last_ptr(&self) -> Pos {
+impl<T, I: PointerStream, const BACKLOG_SIZE: usize> PrependablePointer
+    for PrependableStream<T, I, BACKLOG_SIZE>
+{
+    fn last_ptr(&self) -> Pos {
         if self.backlog.len() > 0 {
             panic!("ptr getter called on a stream with non-empty backlog");
         }
@@ -105,7 +136,7 @@ pub(crate) fn skip_while<T>(
 
 #[cfg(test)]
 mod test {
-    use crate::stream_utils::{PrependableStream, consume_while, skip_while};
+    use super::{PrependableStream, StreamPrepend, consume_while, skip_while};
 
     #[test]
     fn consume_ok() {
@@ -159,5 +190,13 @@ mod test {
         let mut source = PrependableStream::new("test".chars().into_iter());
         assert_eq!(skip_while(&mut source, |v| *v != 't'), 0);
         assert_eq!(source.next(), Some('t'));
+    }
+
+    #[test]
+    #[should_panic]
+    fn overfull_backlog() {
+        let mut source = PrependableStream::<char, _, 1>::new("test".chars().into_iter());
+        source.push('a');
+        source.push('b');
     }
 }
