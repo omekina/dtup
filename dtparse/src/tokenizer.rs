@@ -8,9 +8,14 @@ use crate::{
 };
 
 #[derive(Debug)]
+pub struct Span {
+    pub ptr: Pos,
+    pub span: usize,
+}
+
+#[derive(Debug)]
 pub struct SpanToken {
-    ptr: Pos,
-    span: usize,
+    pub span: Span,
     token: Token,
 }
 
@@ -203,6 +208,22 @@ where
                 (Token::Whitespace(WhitespaceToken { of_type, count }), count)
             }
 
+            v @ '0'..='9' => {
+                self.source.push(StreamResult::Ok(v));
+                match consume_numeric_literal(self.source) {
+                    StreamResult::Ok(v) => {
+                        return Some(StreamResult::Ok(SpanToken {
+                            token: Token::Literal(LiteralToken::Numeric(v.0)),
+                            span: v.1,
+                        }));
+                    }
+                    StreamResult::IoError(e) => return Some(StreamResult::IoError(e)),
+                    StreamResult::ProcessingError(e) => {
+                        return Some(StreamResult::ProcessingError(e));
+                    }
+                }
+            }
+
             '=' => peek_yield!(
                 '=' => Token::RelationalOperator(RelationalOperator::Equal),
                 => Token::Equal
@@ -244,8 +265,7 @@ where
             _ => todo!(),
         };
         Some(StreamResult::Ok(SpanToken {
-            ptr,
-            span: res.1,
+            span: Span { ptr, span: res.1 },
             token: res.0,
         }))
     }
@@ -302,22 +322,34 @@ where
     StreamResult::Ok(res)
 }
 
-fn consume_decimal_literal<I>(
-    first_digit: char,
-    first_digit_pos: Pos,
+enum GenericNumericLiteralResult {
+    Add(u64),
+    InvalidSymbol(String),
+    End,
+}
+
+fn consume_generic_numeric_literal<I>(
+    prepend: &[char],
+    prepend_start_pos: Pos,
+    init_span: usize,
     source: &mut I,
-) -> TokenizerResult<(NumericLiteral, Pos)>
+    base: u64,
+    mapper: impl Fn(&char) -> GenericNumericLiteralResult,
+    numeric_type: NumericLiteralType,
+) -> TokenizerResult<(NumericLiteral, Span)>
 where
     I: Iterator<Item = SourceResult<char>> + StreamPrepend<SourceResult<char>> + PrependablePointer,
 {
-    let mut len = 0;
+    let mut len = init_span;
     let mut res = 0u64;
 
     macro_rules! throw {
         (@skip) => {
-            match skip_while(source, |v| match v {
-                '0'..='9' | 'a'..='z' | 'A'..='Z' => true,
-                _ => false,
+            match skip_while(source, |c| {
+                match c {
+                    '0'..='9' | 'a'..='z' | 'A'..='Z' => true,
+                    _ => false,
+                }
             }) {
                 StreamResult::Ok(v) => v,
                 StreamResult::IoError(e) => return StreamResult::IoError(e),
@@ -337,8 +369,8 @@ where
         };
 
         ($e: expr) => {{
-            let skipped = throw!(@skip);
-            return throw!(@err $e, len + skipped, first_digit_pos);
+            let skipped = throw!(@skip) + 1;
+            return throw!(@err $e, len + skipped, prepend_start_pos);
         }};
 
         (exact $e: expr) => {{
@@ -348,28 +380,44 @@ where
         }};
     }
 
-    while let Some(c) = source.next() {
-        match c {
-            StreamResult::Ok(c @ '0'..='9') => {
+    macro_rules! add {
+        ($to_add: expr, $target: expr) => {
+            match $target.checked_mul(base).map(|v| v.checked_add($to_add)) {
+                Some(Some(v)) => v,
+                _ => throw!(format!(
+                    "numeric literal too large, maximum is `{}`",
+                    u64::MAX
+                )),
+            }
+        };
+    }
+
+    for c in prepend {
+        match mapper(c) {
+            GenericNumericLiteralResult::Add(to_add) => {
                 len += 1;
-                res = match res
-                    .checked_mul(10)
-                    .map(|v| v.checked_add(u64::try_from(c).unwrap()))
-                {
-                    Some(Some(v)) => v,
-                    _ => throw!(format!(
-                        "numeric literal too large, maximum is `{}`",
-                        u64::MAX
-                    )),
-                };
+                res = add!(to_add, res);
             }
-            StreamResult::Ok('a'..='f' | 'A'..='F') => {
-                throw!(exact "invalid symbol in a decimal literal, use `0x` prefix for hexadecimal".to_string());
-            }
-            StreamResult::Ok(v @ ('g'..='z' | 'G'..='Z')) => {
-                throw!(exact format!("invalid character `{:?}` for a numeric literal", v));
-            }
+            GenericNumericLiteralResult::InvalidSymbol(msg) => throw!(exact msg),
+            GenericNumericLiteralResult::End => panic!("invalid numeric literal prefix handling"),
+        }
+    }
+
+    while let Some(v) = source.next() {
+        let c = match v {
+            StreamResult::Ok(v) => v,
             v @ _ => {
+                source.push(v);
+                break;
+            }
+        };
+        match mapper(&c) {
+            GenericNumericLiteralResult::Add(to_add) => {
+                len += 1;
+                res = add!(to_add, res);
+            }
+            GenericNumericLiteralResult::InvalidSymbol(msg) => throw!(exact msg),
+            GenericNumericLiteralResult::End => {
                 source.push(v);
                 break;
             }
@@ -377,11 +425,132 @@ where
     }
     StreamResult::Ok((
         NumericLiteral {
-            of_type: NumericLiteralType::Decimal,
+            of_type: numeric_type,
             value: res,
         },
-        first_digit_pos,
+        Span {
+            ptr: prepend_start_pos,
+            span: len,
+        },
     ))
+}
+
+fn consume_decimal_literal<I>(
+    prepend: &[char],
+    prepend_start_pos: Pos,
+    init_span: usize,
+    source: &mut I,
+) -> TokenizerResult<(NumericLiteral, Span)>
+where
+    I: Iterator<Item = SourceResult<char>> + StreamPrepend<SourceResult<char>> + PrependablePointer,
+{
+    consume_generic_numeric_literal(
+        prepend,
+        prepend_start_pos,
+        init_span,
+        source,
+        10,
+        |c| match c {
+            '0' => GenericNumericLiteralResult::Add(0),
+            '1' => GenericNumericLiteralResult::Add(1),
+            '2' => GenericNumericLiteralResult::Add(2),
+            '3' => GenericNumericLiteralResult::Add(3),
+            '4' => GenericNumericLiteralResult::Add(4),
+            '5' => GenericNumericLiteralResult::Add(5),
+            '6' => GenericNumericLiteralResult::Add(6),
+            '7' => GenericNumericLiteralResult::Add(7),
+            '8' => GenericNumericLiteralResult::Add(8),
+            '9' => GenericNumericLiteralResult::Add(9),
+            'a'..='f' | 'A'..='F' => GenericNumericLiteralResult::InvalidSymbol(
+                "invalid symbol for a decimal literal, use `0x` prefix for hexadecimal".to_string(),
+            ),
+            'g'..='z' | 'G'..='Z' => GenericNumericLiteralResult::InvalidSymbol(
+                "invalid symbol for a decimal literal".to_string(),
+            ),
+            _ => GenericNumericLiteralResult::End,
+        },
+        NumericLiteralType::Decimal,
+    )
+}
+
+fn consume_hexadecimal_literal<I>(
+    prepend: &[char],
+    prepend_start_pos: Pos,
+    init_span: usize,
+    source: &mut I,
+) -> TokenizerResult<(NumericLiteral, Span)>
+where
+    I: Iterator<Item = SourceResult<char>> + StreamPrepend<SourceResult<char>> + PrependablePointer,
+{
+    consume_generic_numeric_literal(
+        prepend,
+        prepend_start_pos,
+        init_span,
+        source,
+        16,
+        |c| match c {
+            '0' => GenericNumericLiteralResult::Add(0),
+            '1' => GenericNumericLiteralResult::Add(1),
+            '2' => GenericNumericLiteralResult::Add(2),
+            '3' => GenericNumericLiteralResult::Add(3),
+            '4' => GenericNumericLiteralResult::Add(4),
+            '5' => GenericNumericLiteralResult::Add(5),
+            '6' => GenericNumericLiteralResult::Add(6),
+            '7' => GenericNumericLiteralResult::Add(7),
+            '8' => GenericNumericLiteralResult::Add(8),
+            '9' => GenericNumericLiteralResult::Add(9),
+            'a' | 'A' => GenericNumericLiteralResult::Add(10),
+            'b' | 'B' => GenericNumericLiteralResult::Add(11),
+            'c' | 'C' => GenericNumericLiteralResult::Add(12),
+            'd' | 'D' => GenericNumericLiteralResult::Add(13),
+            'e' | 'E' => GenericNumericLiteralResult::Add(14),
+            'f' | 'F' => GenericNumericLiteralResult::Add(15),
+            'g'..='z' | 'G'..='Z' => GenericNumericLiteralResult::InvalidSymbol(
+                "invalid symbol for a hexadecimal literal".to_string(),
+            ),
+            _ => GenericNumericLiteralResult::End,
+        },
+        NumericLiteralType::Hex,
+    )
+}
+
+fn consume_numeric_literal<I>(source: &mut I) -> TokenizerResult<(NumericLiteral, Span)>
+where
+    I: Iterator<Item = SourceResult<char>> + StreamPrepend<SourceResult<char>> + PrependablePointer,
+{
+    macro_rules! try_result {
+        ($v: expr) => {
+            match $v {
+                StreamResult::Ok(v) => v,
+                StreamResult::IoError(e) => return StreamResult::IoError(e),
+                StreamResult::ProcessingError(e) => {
+                    return StreamResult::ProcessingError(StreamedError::ShouldEnd(e))
+                }
+            }
+        };
+    }
+    match try_result!(source.next().unwrap()) {
+        '0' => {
+            let ptr = source.last_ptr();
+            match source.next() {
+                Some(v) => match try_result!(v) {
+                    'x' => consume_hexadecimal_literal(&[], ptr, 2, source),
+                    v @ _ => {
+                        source.push(StreamResult::Ok(v));
+                        consume_decimal_literal(&['0'], ptr, 1, source)
+                    }
+                },
+                None => StreamResult::Ok((
+                    NumericLiteral {
+                        of_type: NumericLiteralType::Decimal,
+                        value: 0,
+                    },
+                    Span { ptr, span: 1 },
+                )),
+            }
+        }
+        v @ _ => consume_decimal_literal(&[v], source.last_ptr(), 1, source),
+    }
 }
 
 fn count_matching<I>(target: &char, source: &mut I) -> SourceResult<usize>
