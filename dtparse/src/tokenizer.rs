@@ -224,6 +224,16 @@ where
                 }
             }
 
+            '"' => match consume_string(self.source, ptr) {
+                StreamResult::Ok((v, pos, span)) => {
+                    return Some(StreamResult::Ok(SpanToken { span: Span {
+                        ptr: pos, span,
+                    }, token: Token::Literal(LiteralToken::String(v)) }))
+                }
+                StreamResult::IoError(e) => return Some(StreamResult::IoError(e)),
+                StreamResult::ProcessingError(e) => return Some(StreamResult::ProcessingError(e)),
+            },
+
             '=' => peek_yield!(
                 '=' => Token::RelationalOperator(RelationalOperator::Equal),
                 => Token::Equal
@@ -300,6 +310,54 @@ where
         len += 1;
     }
     StreamResult::Ok((res, len))
+}
+
+fn consume_string<I>(source: &mut I, start: Pos) -> TokenizerResult<(String, Pos, usize)>
+where
+    I: Iterator<Item = SourceResult<char>> + StreamPrepend<SourceResult<char>>
+{
+    macro_rules! try_yield {
+        ($v: expr) => {
+            match $v {
+                Some(StreamResult::Ok(v)) => Some(v),
+                Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
+                Some(StreamResult::ProcessingError(e)) => return StreamResult::ProcessingError(
+                    StreamedError::ShouldEnd(e)
+                ),
+                None => None,
+            }
+        };
+    }
+
+    let mut res = String::new();
+    let mut len = 1;
+    let mut terminated = false;
+    while let Some(c) = try_yield!(source.next()) {
+        len += 1;
+        match c {
+            '"' => {
+                terminated = true;
+                break;
+            }
+            '\n' => {
+                return StreamResult::ProcessingError(StreamedError::CanContinue(simple_error(
+                    Errors::InvalidStringLiteral,
+                    "string literal started here contains a newline".to_string(),
+                    1, start,
+                )))
+            }
+            v @ _ => res.push(v),
+        }
+    }
+
+    match terminated {
+        true => StreamResult::Ok((res, start, len)),
+        false => StreamResult::ProcessingError(StreamedError::CanContinue(simple_error(
+            Errors::InvalidStringLiteral,
+            "unterminated string literal begins here".to_string(),
+            1, start,
+        ))),
+    }
 }
 
 fn skip_while<T, I>(source: &mut I, predicate: impl Fn(&T) -> bool) -> SourceResult<usize>

@@ -5,6 +5,8 @@ pub enum Errors {
     InvalidUtf8Character,
     /// Invalid symbol inside a numeric literal
     InvalidNumericLiteral,
+    /// Invalid string literal
+    InvalidStringLiteral,
 }
 
 impl Errors {
@@ -12,6 +14,7 @@ impl Errors {
         match self {
             Self::InvalidUtf8Character => "invalid UTF-8 character",
             Self::InvalidNumericLiteral => "invalid numeric literal",
+            Self::InvalidStringLiteral => "invalid string literal",
         }
         .to_string()
     }
@@ -20,6 +23,7 @@ impl Errors {
         match self {
             Self::InvalidUtf8Character => "E001".to_string(),
             Self::InvalidNumericLiteral => "E002".to_string(),
+            Self::InvalidStringLiteral => "E003".to_string(),
         }
     }
 }
