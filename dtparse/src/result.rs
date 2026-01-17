@@ -5,8 +5,8 @@ pub enum Errors {
     InvalidUtf8Character,
     /// Invalid symbol inside a numeric literal
     InvalidNumericLiteral,
-    /// Invalid string literal
     InvalidStringLiteral,
+    UnclosedBlockComment,
 }
 
 impl Errors {
@@ -15,6 +15,7 @@ impl Errors {
             Self::InvalidUtf8Character => "invalid UTF-8 character",
             Self::InvalidNumericLiteral => "invalid numeric literal",
             Self::InvalidStringLiteral => "invalid string literal",
+            Self::UnclosedBlockComment => "unclosed block comment",
         }
         .to_string()
     }
@@ -24,6 +25,7 @@ impl Errors {
             Self::InvalidUtf8Character => "E001".to_string(),
             Self::InvalidNumericLiteral => "E002".to_string(),
             Self::InvalidStringLiteral => "E003".to_string(),
+            Self::UnclosedBlockComment => "E004".to_string(),
         }
     }
 }

@@ -24,6 +24,7 @@ pub enum Token {
     Whitespace(WhitespaceToken),
     Literal(LiteralToken),
     Ident(String),
+    Comment(Comment),
     /// `#`
     Hash,
     /// `=`
@@ -32,6 +33,8 @@ pub enum Token {
     Semicolon,
     /// `:`
     Colon,
+    /// `/`
+    Slash,
     /// `,`
     Comma,
     /// `&`
@@ -44,6 +47,18 @@ pub enum Token {
     BitwiseOperator(BitwiseOperator),
     LogicalOperator(LogicalOperator),
     RelationalOperator(RelationalOperator),
+}
+
+#[derive(Debug)]
+pub struct Comment {
+    of_type: CommentType,
+    content: String,
+}
+
+#[derive(Debug)]
+pub enum CommentType {
+    Block,
+    Line,
 }
 
 #[derive(Debug)]
@@ -95,14 +110,13 @@ pub enum NumericLiteralType {
 
 #[derive(Debug)]
 pub enum ArithmeticOperator {
+    // `/` is omitted
     /// `+` (add)
     Plus,
     /// `-` (subtract)
     Dash,
     /// `*` (multiply)
     Asterisk,
-    /// `/` (divide)
-    Slash,
     /// `%` (modulo)
     Percent,
 }
@@ -175,6 +189,16 @@ where
                     }
                 }
             };
+
+            (@direct $v: expr) => {
+                match $v {
+                    StreamResult::Ok(v) => v,
+                    StreamResult::IoError(e) => return Some(StreamResult::IoError(e)),
+                    StreamResult::ProcessingError(e) => {
+                        return Some(StreamResult::ProcessingError(e))
+                    }
+                }
+            }
         }
 
         let c = try_result!(self.source.next()?);
@@ -184,6 +208,13 @@ where
             ($($peek_match: expr => $yield: expr),*$(,)? => $fallback_yield: expr) => {
                 match self.source.next() {
                     $(Some(StreamResult::Ok($peek_match)) => ($yield, 2),)*
+                    v @ _ => peek_yield!(@fallback v, $fallback_yield),
+                }
+            };
+
+            (@custom $($peek_match: expr => $yield: expr),*$(,)? => $fallback_yield: expr) => {
+                match self.source.next() {
+                    $(Some(StreamResult::Ok($peek_match)) => $yield,)*
                     v @ _ => peek_yield!(@fallback v, $fallback_yield),
                 }
             };
@@ -256,11 +287,22 @@ where
                 '|' => Token::LogicalOperator(LogicalOperator::Or),
                 => Token::BitwiseOperator(BitwiseOperator::Or)
             ),
+            '/' => peek_yield!(@custom
+                '/' => {
+                    let (content, span) = try_result!(@direct consume_line_comment(self.source));
+                    (Token::Comment(Comment { of_type: CommentType::Line, content }), span)
+                },
+                '*' => {
+                    return Some(TokenizerResult::Ok(
+                        try_result!(@direct consume_block_comment(ptr, self.source))
+                    ));
+                }
+                => Token::Slash
+            ),
 
             '+' => (Token::ArithmeticOperator(ArithmeticOperator::Plus), 1),
             '-' => (Token::ArithmeticOperator(ArithmeticOperator::Dash), 1),
             '*' => (Token::ArithmeticOperator(ArithmeticOperator::Asterisk), 1),
-            '/' => (Token::ArithmeticOperator(ArithmeticOperator::Slash), 1),
             '%' => (Token::ArithmeticOperator(ArithmeticOperator::Percent), 1),
 
             '^' => (Token::BitwiseOperator(BitwiseOperator::Xor), 1),
@@ -286,6 +328,81 @@ fn simple_error(error: Errors, message: String, span: usize, ptr: Pos) -> ParseE
         PrimitiveMainMessage::error(error.message(), error.id()),
         PrimitiveReportMessage::error(message, span, ptr),
     )))
+}
+
+macro_rules! try_yield {
+    ($v: expr) => {
+        match $v {
+            Some(StreamResult::Ok(v)) => Some(v),
+            Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
+            Some(StreamResult::ProcessingError(e)) => return StreamResult::ProcessingError(
+                StreamedError::ShouldEnd(e)
+            ),
+            None => None,
+        }
+    };
+}
+
+fn consume_line_comment<I>(source: &mut I) -> TokenizerResult<(String, usize)>
+where
+    I: Iterator<Item = SourceResult<char>> + StreamPrepend<SourceResult<char>>,
+{
+    let mut len = 0;
+    let mut res = String::new();
+    while let Some(c) = try_yield!(source.next()) {
+        match c {
+            '\n' => {
+                source.push(SourceResult::Ok(c));
+                break;
+            },
+            v @ _ => {
+                len += 1;
+                res.push(v);
+            }
+        }
+    }
+    TokenizerResult::Ok((res, len))
+}
+
+fn consume_block_comment<I>(start: Pos, source: &mut I) -> TokenizerResult<SpanToken>
+where
+    I: Iterator<Item = SourceResult<char>> + StreamPrepend<SourceResult<char>>,
+{
+    let mut len = 4;
+    let mut res = String::new();
+    let mut terminated = false;
+    while let Some(c) = try_yield!(source.next()) {
+        match c {
+            '*' => {
+                match try_yield!(source.next()) {
+                    Some('/') => {
+                        terminated = true;
+                        break;
+                    },
+                    None => break,
+                    Some(v @ _) => {
+                        source.push(SourceResult::Ok(v));
+                    }
+                }
+            }
+            v @ _ => {
+                len += 1;
+                res.push(v);
+            }
+        }
+    }
+    match terminated {
+        true => TokenizerResult::Ok(SpanToken {
+            span: Span { ptr: start, span: len },
+            token: Token::Comment(Comment { of_type: CommentType::Block, content: res }),
+        }),
+        false => TokenizerResult::ProcessingError(StreamedError::CanContinue(simple_error(
+            Errors::UnclosedBlockComment,
+            "unclosed block comment begins here".to_string(),
+            2,
+            start,
+        ))),
+    }
 }
 
 fn consume_ident<I>(prepend: char, source: &mut I) -> SourceResult<(String, usize)>
@@ -316,19 +433,6 @@ fn consume_string<I>(source: &mut I, start: Pos) -> TokenizerResult<(String, Pos
 where
     I: Iterator<Item = SourceResult<char>> + StreamPrepend<SourceResult<char>>
 {
-    macro_rules! try_yield {
-        ($v: expr) => {
-            match $v {
-                Some(StreamResult::Ok(v)) => Some(v),
-                Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
-                Some(StreamResult::ProcessingError(e)) => return StreamResult::ProcessingError(
-                    StreamedError::ShouldEnd(e)
-                ),
-                None => None,
-            }
-        };
-    }
-
     let mut res = String::new();
     let mut len = 1;
     let mut terminated = false;
