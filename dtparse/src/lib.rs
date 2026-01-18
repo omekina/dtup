@@ -46,6 +46,7 @@ impl AsRef<str> for MaybeOwnedString<'_> {
 
 mod file;
 mod helpers;
+mod lexer;
 mod pointer_stream;
 mod report;
 mod stream_utils;
