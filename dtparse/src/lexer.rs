@@ -1,10 +1,9 @@
 use crate::{
-    pointer_stream::Pos,
     report::{
         PrimitiveMainMessage, PrimitiveReport, PrimitiveReportMessage, PrimitiveReportSegment,
         ReportInlineMessage,
     },
-    result::{Errors, ParseErrorReport, StreamResult, StreamedError},
+    result::{Errors, ParseErrorReport, StreamResult, StreamedError, Warnings},
     stream_utils::StreamPrepend,
     tokenizer::{
         ArithmeticOperator, Comment, CommentType, GenericLiteralType, GroupType, LiteralToken,
@@ -90,37 +89,55 @@ pub struct Lexer<'a, I> {
     source: &'a mut I,
 }
 
-pub struct LexerItem {
-    token: LexerToken,
-    reports: Option<Vec<ParseErrorReport>>,
-    top_level: bool,
+impl<'a, I> Lexer<'a, I> {
+    pub fn new(source: &'a mut I) -> Self {
+        Self { source }
+    }
 }
 
-impl<I: Iterator<Item = TokenizerStreamItem>> Iterator for Lexer<'_, I> {
-    type Item = Result<LexerItem, ParseErrorReport>;
+#[derive(Debug)]
+pub struct LexerItem {
+    pub token: LexerToken,
+    pub reports: Option<Vec<ParseErrorReport>>,
+    pub prevent_compilation: bool,
+}
+
+impl<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>> Iterator
+    for Lexer<'_, I>
+{
+    type Item = StreamItem<LexerItem>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        if let Some(next) = self.source.next() {
+            self.source.push(next);
+            Some(consume_statement_start(self.source))
+        } else {
+            None
+        }
     }
 }
 
 fn skip_while<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
     source: &mut I,
     skipper: impl Fn(&TokenizerStreamItem) -> bool,
-) {
+) -> usize {
+    let mut skipped = 0;
     while let Some(v) = source.next() {
         if !skipper(&v) {
             source.push(v);
             break;
+        } else {
+            skipped += 1;
         }
     }
+    skipped
 }
 
 macro_rules! auto_parser {
     (skip $name: ident, $skipper: expr) => {
         fn $name<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
             source: &mut I,
-        ) {
+        ) -> usize {
             skip_while(source, $skipper)
         }
     };
@@ -190,7 +207,7 @@ impl ExtendedIdent {
                 let mut idcs = Vec::new();
                 for (idx, ch) in v.chars().enumerate() {
                     match ch {
-                        'a'..='f' | 'A'..='F' | '0'..='9' | '_' => {}
+                        'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => {}
                         _ => idcs.push(idx),
                     }
                 }
@@ -208,7 +225,7 @@ impl ExtendedIdent {
                 let mut idcs = Vec::new();
                 for (idx, ch) in v.chars().enumerate() {
                     match ch {
-                        'a'..='f' | 'A'..='F' | '0'..='9' | '_' | '+' | '-' | '.' | ',' => {}
+                        'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '+' | '-' | '.' | ',' => {}
                         _ => idcs.push(idx),
                     }
                 }
@@ -252,7 +269,7 @@ fn consume_any_ident<
                     | Token::Period
                     | Token::ArithmeticOperator(ArithmeticOperator::Plus | ArithmeticOperator::Dash),
                 ) => Some(v),
-                (_, Token::Hash | Token::QuestionMark) => Some(Self::Label),
+                (_, Token::Hash | Token::QuestionMark) => Some(Self::Attribute),
                 (_, _) => None,
             }
         }
@@ -373,21 +390,21 @@ enum StatementStart {
 macro_rules! def_try_yield {
     ($source: expr) => {
         macro_rules! try_yield {
-                ($after: expr) => {
-                    match $source.next() {
-                        Some(StreamResult::Ok(v)) => v,
-                        Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
-                        Some(StreamResult::ProcessingError(e)) => {
-                            (return StreamResult::ProcessingError(e))
-                        }
-                        None => {
-                            return err!(end [{ UnexpectedEof, [
-                                ("unexpected end after this", $after)
-                            ]}]);
-                        }
+                        ($after: expr) => {
+                            match $source.next() {
+                                Some(StreamResult::Ok(v)) => v,
+                                Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
+                                Some(StreamResult::ProcessingError(e)) => {
+                                    (return StreamResult::ProcessingError(e))
+                                }
+                                None => {
+                                    return err!(end [{ UnexpectedEof, [
+                                        ("unexpected end after this", $after)
+                                    ]}]);
+                                }
+                            }
+                        };
                     }
-                };
-            }
     };
 }
 
@@ -398,11 +415,49 @@ fn consume_statement_start<
 ) -> StreamItem<LexerItem> {
     def_try_yield!(source);
     let start = consume_any_ident(source);
-    skip_possible_inline(source);
+    let skipped = skip_possible(source);
     let next = try_yield!(start.1);
     match next.token {
-        Token::At => consume_node_address(source, start, next),
-        Token::Colon => todo!(),
+        Token::At => {
+            let to_push = if skipped > 0 {
+                Some(err!(raw [{ UnexpectedWhitespace, [
+                    ("a whitespace is unexpected after this node name", start.1.clone()),
+                    ("and this node address separator", next.span.clone()),
+                ]}]))
+            } else {
+                None
+            };
+            consume_node_address(source, start, next).map(|mut item| {
+                if let Some(to_push) = to_push {
+                    let mut report = item.reports.unwrap_or_default();
+                    report.push(to_push);
+                    item.reports = Some(report);
+                }
+                item
+            })
+        }
+        Token::Colon => {
+            let (name, mut reports, abort) = deref_label((start.0, &start.1));
+            if skipped > 0 {
+                let mut reports_inner = match reports {
+                    Some(v) => v,
+                    None => Vec::new(),
+                };
+                reports_inner.push(err!(raw [{ UnexpectedWhitespace, [
+                    ("a whitespace is unexpected after this label name", start.1.clone()),
+                    ("and before this colon", next.span.clone()),
+                ]}]));
+                reports = Some(reports_inner);
+            }
+            StreamResult::Ok(LexerItem {
+                token: LexerToken::Label {
+                    name: (name, start.1),
+                    colon: next.span,
+                },
+                prevent_compilation: abort,
+                reports,
+            })
+        }
         Token::GroupOpening(GroupType::Brace) => {
             let (name, reports) = deref_node_name((start.0, &start.1));
             StreamResult::Ok(LexerItem {
@@ -411,13 +466,77 @@ fn consume_statement_start<
                     unit_address: None,
                     opening_delimiter: next.span,
                 },
+                prevent_compilation: reports.is_some(),
                 reports,
-                top_level: false,
             })
         }
-        Token::Semicolon => todo!(),
-        _ => todo!(),
+        Token::Equal => todo!(),
+        Token::Semicolon => {
+            let (property_name, reports, abort) = deref_attribute_name((start.0, &start.1));
+            StreamResult::Ok(LexerItem {
+                token: LexerToken::Statement(Statement::FlagProperty {
+                    property_name: (property_name, start.1),
+                }),
+                reports,
+                prevent_compilation: abort,
+            })
+        }
+        _ => {
+            let span = next.span.clone();
+            source.push(StreamResult::Ok(next));
+            err!(cont [{ UnexpectedToken, [
+                ("expected a valid statement continuation after this", start.1),
+                ("unexpected token here", span)
+            ] }])
+        }
     }
+}
+
+/// # Returns
+/// (value, errors, should_end)
+fn deref_label(name: (ExtendedIdent, &Span)) -> (String, Option<Vec<ParseErrorReport>>, bool) {
+    let mut errors = Vec::new();
+    let label_name = match name.0.req_label() {
+        Ok(v) => v,
+        Err((e, v)) => {
+            let symbol = e.first().unwrap();
+            let ptr = name.1.ptr.clone().offset(symbol);
+            errors.push(err!(raw [{ InvalidLabelName, [
+                ("invalid symbol in a label name", 1, ptr),
+            ]}]));
+            v
+        }
+    };
+    let abort = errors.len() > 0;
+    (
+        label_name,
+        if errors.len() > 0 { Some(errors) } else { None },
+        abort,
+    )
+}
+
+/// # Returns
+/// (value, errors, should_end)
+fn deref_attribute_name(
+    name: (ExtendedIdent, &Span),
+) -> (String, Option<Vec<ParseErrorReport>>, bool) {
+    let mut errors = Vec::new();
+    let attr_name = name.0.req_attribute_name();
+    match attr_name.chars().nth(0).unwrap() {
+        'a'..='z' | 'A'..='Z' | '#' => {}
+        _ => errors.push(PrimitiveReport::single(PrimitiveReportSegment::single(
+            PrimitiveMainMessage::warning(
+                Warnings::WeirdPropertyName.message(),
+                Warnings::WeirdPropertyName.id(),
+            ),
+            PrimitiveReportMessage::warning(
+                "attribute names should begin with a letter or a hashtag".to_string(),
+                1,
+                name.1.ptr.clone(),
+            ),
+        ))),
+    }
+    (attr_name, None, false)
 }
 
 fn deref_node_name(name: (ExtendedIdent, &Span)) -> (String, Option<Vec<ParseErrorReport>>) {
@@ -454,7 +573,7 @@ fn consume_node_address<
 ) -> StreamItem<LexerItem> {
     def_try_yield!(source);
     skip_block_comments(source);
-    let address = try_yield!(name.1);
+    let address = try_yield!(at.span);
     let (address, address_span) = match address.token {
         Token::Literal(LiteralToken::Ident(v)) => (v, address.span),
         Token::Whitespace(_) | Token::Comment(_) => {
@@ -488,15 +607,9 @@ fn consume_node_address<
         }
     }
     let address = address.content;
-    skip_possible_inline(source);
-    let opening = try_yield!(at.span);
+    skip_possible(source);
+    let opening = try_yield!(address_span);
     match opening.token {
-        Token::Whitespace(_) | Token::Comment(_) => {
-            return err!(cont [{ UnexpectedToken, [
-                ("because this implies a node with address", at.span),
-                ("expected a node opening after this", address_span),
-            ]}]);
-        }
         Token::Equal => {
             return err!(cont [{ UnexpectedToken, [
                 ("unsure what this is meant to be", name.1),
@@ -523,7 +636,7 @@ fn consume_node_address<
             unit_address: Some((address, address_span)),
             opening_delimiter: opening.span,
         },
+        prevent_compilation: reports.is_some(),
         reports,
-        top_level: false,
     })
 }

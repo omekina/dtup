@@ -186,7 +186,7 @@ impl SegmentDisplay<'_> {
             };
 
             // write disjoint segment
-            if prev.file != file || prev.line.line() > line {
+            if prev.file != file || prev.line.line() != line {
                 written += Self::write_filepath(
                     &prev.file,
                     *prev.line.line(),
@@ -308,7 +308,7 @@ impl SegmentDisplay<'_> {
         // pointers and messages
         for i in (0..messages.len()).rev() {
             written += Self::write_line_prefix(None, max_lineno_length, writer)?
-                + Self::write_ptr_lines(&messages, writer)?;
+                + Self::write_ptr_lines(&messages[..i + 1], writer)?;
             if let Some((color, message)) = messages.get(i).map(|v| (v.color(), v.message())) {
                 written += Style::from(color).bold().write(writer)?
                     + writer.write(message)?
@@ -329,7 +329,7 @@ impl SegmentDisplay<'_> {
         for message in messages.iter().take(messages.len().saturating_sub(1)) {
             written += Style::from(message.color()).bold().write(writer)?
                 + writer.write_rep(' ', message.ptr().col().saturating_sub(ptr))?
-                + writer.write(" | ")?
+                + writer.write("|")?
                 + Style::default().reset().write(writer)?;
             ptr = message.ptr().col() + 1;
         }
@@ -389,6 +389,10 @@ impl PrimitiveMainMessage {
 
     pub fn error(message: String, id: String) -> Self {
         Self::new(message, "error".to_string(), Color::Red, Some(id))
+    }
+
+    pub fn warning(message: String, id: String) -> Self {
+        Self::new(message, "warning".to_string(), Color::Yellow, Some(id))
     }
 }
 
@@ -491,6 +495,10 @@ impl PrimitiveReportMessage {
 
     pub fn error(message: String, span: usize, ptr: Pos) -> Self {
         Self::new(message, Color::Red, '^', span, ptr)
+    }
+
+    pub fn warning(message: String, span: usize, ptr: Pos) -> Self {
+        Self::new(message, Color::Yellow, '^', span, ptr)
     }
 }
 

@@ -54,4 +54,7 @@ mod string;
 mod styling;
 mod tokenizer;
 
+pub use file::BasicFileReader;
 pub use helpers::parse;
+pub use report::ReportDisplay;
+pub use result::{ParseErrorReport, StreamResult, StreamedError};

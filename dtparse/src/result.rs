@@ -13,6 +13,8 @@ pub enum Errors {
     UnexpectedToken,
     InvalidNodeAddress,
     InvalidNodeName,
+    InvalidLabelName,
+    UnexpectedWhitespace,
 }
 
 impl Errors {
@@ -27,22 +29,47 @@ impl Errors {
             Self::UnexpectedToken => "unexpected token",
             Self::InvalidNodeAddress => "invalid node address",
             Self::InvalidNodeName => "invalid node name",
+            Self::InvalidLabelName => "invalid label name",
+            Self::UnexpectedWhitespace => "unexpected whitespace or comment",
         }
         .to_string()
     }
 
     pub fn id(&self) -> String {
         match self {
-            Self::InvalidUtf8Character => "E001".to_string(),
-            Self::InvalidCharacter => "E002".to_string(),
-            Self::InvalidNumericLiteral => "E003".to_string(),
-            Self::InvalidStringLiteral => "E004".to_string(),
-            Self::UnclosedBlockComment => "E005".to_string(),
-            Self::UnexpectedEof => "E006".to_string(),
-            Self::UnexpectedToken => "E007".to_string(),
-            Self::InvalidNodeAddress => "E008".to_string(),
-            Self::InvalidNodeName => "E009".to_string(),
+            Self::InvalidUtf8Character => "E001",
+            Self::InvalidCharacter => "E002",
+            Self::InvalidNumericLiteral => "E003",
+            Self::InvalidStringLiteral => "E004",
+            Self::UnclosedBlockComment => "E005",
+            Self::UnexpectedEof => "E006",
+            Self::UnexpectedToken => "E007",
+            Self::InvalidNodeAddress => "E008",
+            Self::InvalidNodeName => "E009",
+            Self::InvalidLabelName => "E010",
+            Self::UnexpectedWhitespace => "E011",
         }
+        .to_string()
+    }
+}
+
+pub enum Warnings {
+    WeirdPropertyName,
+}
+
+impl Warnings {
+    pub fn message(&self) -> String {
+        match self {
+            Self::WeirdPropertyName => "weird property name",
+        }
+        .to_string()
+    }
+
+    pub fn id(&self) -> String {
+        match self {
+            Self::WeirdPropertyName => "W001",
+        }
+        .to_string()
     }
 }
 
