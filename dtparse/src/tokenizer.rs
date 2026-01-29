@@ -7,7 +7,7 @@ use crate::{
     stream_utils::{PrependablePointer, StreamPrepend},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Span {
     pub ptr: Pos,
     pub span: usize,
@@ -16,14 +16,13 @@ pub struct Span {
 #[derive(Debug)]
 pub struct SpanToken {
     pub span: Span,
-    token: Token,
+    pub token: Token,
 }
 
 #[derive(Debug)]
 pub enum Token {
     Whitespace(WhitespaceToken),
     Literal(LiteralToken),
-    Ident(String),
     Comment(Comment),
     /// `=`
     Equal,
@@ -35,22 +34,73 @@ pub enum Token {
     Slash,
     /// `,`
     Comma,
+    /// `.`
+    Period,
     /// `&`
     Ampersand,
     /// `<`
     Lt,
     /// `>`
     Gt,
+    /// `{` or `[` or `(`
+    GroupOpening(GroupType),
+    /// `}` or `]` or `)`
+    GroupClosing(GroupType),
+    /// `@`
+    At,
+    /// `#`
+    Hash,
+    /// `?`
+    QuestionMark,
     ArithmeticOperator(ArithmeticOperator),
     BitwiseOperator(BitwiseOperator),
     LogicalOperator(LogicalOperator),
     RelationalOperator(RelationalOperator),
 }
 
+impl From<Token> for String {
+    fn from(value: Token) -> Self {
+        match value {
+            Token::Literal(lit) => lit.into(),
+            Token::Comment(comment) => comment.to_string(),
+            Token::Equal => "=".to_string(),
+            Token::Semicolon => ";".to_string(),
+            Token::Colon => ":".to_string(),
+            Token::Slash => "/".to_string(),
+            Token::Comma => ",".to_string(),
+            Token::Period => ".".to_string(),
+            Token::Ampersand => "&".to_string(),
+            Token::Lt => "<".to_string(),
+            Token::Gt => ">".to_string(),
+            Token::GroupOpening(of_type) => of_type.start_delimiter().to_string(),
+            Token::GroupClosing(of_type) => of_type.end_delimiter().to_string(),
+            Token::At => "@".to_string(),
+            Token::Hash => "#".to_string(),
+            Token::QuestionMark => "?".to_string(),
+            Token::ArithmeticOperator(operator) => <&'static str>::from(operator).to_string(),
+            Token::BitwiseOperator(operator) => <&'static str>::from(operator).to_string(),
+            Token::LogicalOperator(operator) => <&'static str>::from(operator).to_string(),
+            Token::RelationalOperator(operator) => <&'static str>::from(operator).to_string(),
+            Token::Whitespace(whitespace) => whitespace.to_string(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Comment {
-    of_type: CommentType,
-    content: String,
+    pub of_type: CommentType,
+    pub content: String,
+}
+
+impl ToString for Comment {
+    fn to_string(&self) -> String {
+        format!(
+            "{}{}{}",
+            self.of_type.start_delimiter(),
+            self.content,
+            self.of_type.end_delimiter()
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -59,10 +109,60 @@ pub enum CommentType {
     Line,
 }
 
+impl CommentType {
+    fn start_delimiter(&self) -> &'static str {
+        match self {
+            Self::Block => "/*",
+            Self::Line => "//",
+        }
+    }
+
+    fn end_delimiter(&self) -> &'static str {
+        match self {
+            Self::Block => "*/",
+            Self::Line => "",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct WhitespaceToken {
-    of_type: WhitespaceTokenType,
-    count: usize,
+    pub of_type: WhitespaceTokenType,
+    pub count: usize,
+}
+
+impl ToString for WhitespaceToken {
+    fn to_string(&self) -> String {
+        self.of_type.to_string().repeat(self.count)
+    }
+}
+
+#[derive(Debug)]
+pub enum GroupType {
+    /// `{`, `}`
+    Brace,
+    /// `[`, `]`
+    Square,
+    /// `(`, `)`
+    Paren,
+}
+
+impl GroupType {
+    fn start_delimiter(&self) -> &'static str {
+        match self {
+            Self::Brace => "{",
+            Self::Square => "[",
+            Self::Paren => "(",
+        }
+    }
+
+    fn end_delimiter(&self) -> &'static str {
+        match self {
+            Self::Brace => "}",
+            Self::Square => "]",
+            Self::Paren => ")",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -73,6 +173,16 @@ pub enum WhitespaceTokenType {
     Tab,
     /// `\n`
     Newline,
+}
+
+impl ToString for WhitespaceTokenType {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Space => " ".to_string(),
+            Self::Tab => "\t".to_string(),
+            Self::Newline => "\n".to_string(),
+        }
+    }
 }
 
 impl TryFrom<char> for WhitespaceTokenType {
@@ -90,23 +200,30 @@ impl TryFrom<char> for WhitespaceTokenType {
 
 #[derive(Debug)]
 pub enum LiteralToken {
-    Generic(GenericLiteral),
+    Ident(GenericLiteral),
     String(String),
+}
+
+impl From<LiteralToken> for String {
+    fn from(value: LiteralToken) -> Self {
+        match value {
+            LiteralToken::Ident(lit) => lit.content,
+            LiteralToken::String(str) => str,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct GenericLiteral {
-    content: String,
-    of_type: GenericLiteralType,
+    pub content: String,
+    pub of_type: GenericLiteralType,
 }
 
 #[derive(Debug)]
 pub enum GenericLiteralType {
     DecimalNumeric,
     HexadecimalNumeric { prefix: bool },
-    LabelName,
-    NodeName,
-    PropertyName,
+    Ident,
 }
 
 impl GenericLiteral {
@@ -116,10 +233,8 @@ impl GenericLiteral {
         let of_type = match symbol {
             '0'..='9' => GenericLiteralType::DecimalNumeric,
             'a'..='f' | 'A'..='F' => GenericLiteralType::HexadecimalNumeric { prefix: false },
-            'g'..'z' | 'G'..='Z' | '_' => GenericLiteralType::LabelName,
-            ',' | '.' | '+' | '-' => GenericLiteralType::NodeName,
-            '?' | '#' => GenericLiteralType::PropertyName,
-            _ => panic!("bad generic literal handling"),
+            'g'..='z' | 'G'..='Z' | '_' => GenericLiteralType::Ident,
+            v @ _ => panic!("bad generic literal handling for symbol: {:?}", v),
         };
         Self {
             content: symbol.to_string(),
@@ -148,43 +263,41 @@ impl GenericLiteral {
                 GenericLiteralType::DecimalNumeric | GenericLiteralType::HexadecimalNumeric { .. },
                 'g'..='z' | 'G'..='Z' | '_',
             ) => {
-                self.of_type = GenericLiteralType::LabelName;
+                self.of_type = GenericLiteralType::Ident;
                 true
             }
-            (GenericLiteralType::LabelName, '0'..='9' | 'a'..='z' | 'A'..='Z' | '_') => true,
-            (
-                GenericLiteralType::DecimalNumeric
-                | GenericLiteralType::HexadecimalNumeric { .. }
-                | GenericLiteralType::LabelName,
-                ',' | '.' | '+' | '-',
-            ) => {
-                self.of_type = GenericLiteralType::NodeName;
-                true
-            }
-            (
-                GenericLiteralType::NodeName,
-                '0'..='9' | 'a'..='z' | 'A'..='Z' | '_' | ',' | '.' | '+' | '-',
-            ) => true,
-            (
-                GenericLiteralType::DecimalNumeric
-                | GenericLiteralType::HexadecimalNumeric { .. }
-                | GenericLiteralType::LabelName
-                | GenericLiteralType::NodeName,
-                '?' | '#',
-            ) => {
-                self.of_type = GenericLiteralType::PropertyName;
-                true
-            }
-            (
-                GenericLiteralType::PropertyName,
-                '0'..='9' | 'a'..='z' | 'A'..='Z' | '_' | ',' | '.' | '+' | '-' | '?' | '#',
-            ) => true,
+            (GenericLiteralType::Ident, '0'..='9' | 'a'..='z' | 'A'..='Z' | '_') => true,
             (_, _) => false,
         };
         if res {
             self.content.push(*symbol);
         }
         res
+    }
+
+    /// # Error
+    /// Returns the indices of the invalid symbols if the numeric literal is invalid
+    pub fn req_number(self) -> Result<NumericLiteral, Vec<usize>> {
+        match self.of_type {
+            GenericLiteralType::DecimalNumeric => Ok(NumericLiteral::dec(self.content)),
+            GenericLiteralType::HexadecimalNumeric { prefix } => {
+                Ok(NumericLiteral::hex(self.content, prefix))
+            }
+            GenericLiteralType::Ident => Err({
+                let mut found_idcs = Vec::new();
+                for (idx, c) in self.content.chars().enumerate() {
+                    match c {
+                        '0'..='9' | 'a'..='f' | 'A'..='F' => {}
+                        _ => found_idcs.push(idx),
+                    }
+                }
+                found_idcs
+            }),
+        }
+    }
+
+    pub fn req_ident(self) -> String {
+        self.content
     }
 }
 
@@ -231,12 +344,32 @@ impl GenericLiteralPrefixParser {
 #[derive(Debug)]
 pub struct NumericLiteral {
     of_type: NumericLiteralType,
-    value: u64,
+    content: String,
+}
+
+impl NumericLiteral {
+    fn new(of_type: NumericLiteralType, content: String) -> Self {
+        Self { of_type, content }
+    }
+
+    fn dec(content: String) -> Self {
+        Self::new(NumericLiteralType::Decimal, content)
+    }
+
+    fn hex(content: String, with_prefix: bool) -> Self {
+        Self::new(NumericLiteralType::Hex { with_prefix }, content)
+    }
+}
+
+impl From<NumericLiteral> for String {
+    fn from(value: NumericLiteral) -> Self {
+        value.content
+    }
 }
 
 #[derive(Debug)]
 pub enum NumericLiteralType {
-    Hex,
+    Hex { with_prefix: bool },
     Decimal,
 }
 
@@ -251,6 +384,17 @@ pub enum ArithmeticOperator {
     Asterisk,
     /// `%` (modulo)
     Percent,
+}
+
+impl From<ArithmeticOperator> for &'static str {
+    fn from(value: ArithmeticOperator) -> Self {
+        match value {
+            ArithmeticOperator::Plus => "+",
+            ArithmeticOperator::Dash => "-",
+            ArithmeticOperator::Asterisk => "*",
+            ArithmeticOperator::Percent => "%",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -268,6 +412,18 @@ pub enum BitwiseOperator {
     RightShift,
 }
 
+impl From<BitwiseOperator> for &'static str {
+    fn from(value: BitwiseOperator) -> Self {
+        match value {
+            BitwiseOperator::Or => "|",
+            BitwiseOperator::Xor => "^",
+            BitwiseOperator::Not => "~",
+            BitwiseOperator::LeftShift => "<<",
+            BitwiseOperator::RightShift => ">>",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum LogicalOperator {
     /// `&&`
@@ -276,6 +432,16 @@ pub enum LogicalOperator {
     Or,
     /// `!`
     Not,
+}
+
+impl From<LogicalOperator> for &'static str {
+    fn from(value: LogicalOperator) -> Self {
+        match value {
+            LogicalOperator::And => "&&",
+            LogicalOperator::Or => "||",
+            LogicalOperator::Not => "!",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -289,6 +455,17 @@ pub enum RelationalOperator {
     Equal,
     /// `!=`
     NotEqual,
+}
+
+impl From<RelationalOperator> for &'static str {
+    fn from(value: RelationalOperator) -> Self {
+        match value {
+            RelationalOperator::LessOrEqual => "<=",
+            RelationalOperator::GreaterOrEqual => ">=",
+            RelationalOperator::Equal => "==",
+            RelationalOperator::NotEqual => "!=",
+        }
+    }
 }
 
 type SourceResult<T> = StreamResult<T, ParseErrorReport>;
@@ -360,9 +537,9 @@ where
         }
 
         let res = match c {
-            v @ ('a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '#') => {
+            v @ ('a'..='z' | 'A'..='Z' | '0'..='9' | '_') => {
                 let v = try_result!(consume_generic_literal(v, self.source));
-                (Token::Literal(LiteralToken::Generic(v.0)), v.1)
+                (Token::Literal(LiteralToken::Ident(v.0)), v.1)
             }
 
             v @ (' ' | '\t' | '\n') => {
@@ -417,6 +594,13 @@ where
                 => Token::Slash
             ),
 
+            '{' => (Token::GroupOpening(GroupType::Brace), 1),
+            '}' => (Token::GroupClosing(GroupType::Brace), 1),
+            '(' => (Token::GroupOpening(GroupType::Paren), 1),
+            ')' => (Token::GroupClosing(GroupType::Paren), 1),
+            '[' => (Token::GroupOpening(GroupType::Square), 1),
+            ']' => (Token::GroupClosing(GroupType::Square), 1),
+
             '+' => (Token::ArithmeticOperator(ArithmeticOperator::Plus), 1),
             '-' => (Token::ArithmeticOperator(ArithmeticOperator::Dash), 1),
             '*' => (Token::ArithmeticOperator(ArithmeticOperator::Asterisk), 1),
@@ -429,7 +613,20 @@ where
             ';' => (Token::Semicolon, 1),
             ':' => (Token::Colon, 1),
             ',' => (Token::Comma, 1),
-            _ => todo!(),
+            '.' => (Token::Period, 1),
+            '@' => (Token::At, 1),
+            '#' => (Token::Hash, 1),
+            '?' => (Token::QuestionMark, 1),
+            v @ _ => {
+                return Some(StreamResult::ProcessingError(StreamedError::CanContinue(
+                    simple_error(
+                        Errors::InvalidCharacter,
+                        format!("unknown character {:?} is here", v),
+                        1,
+                        self.source.last_ptr(),
+                    ),
+                )));
+            }
         };
         Some(StreamResult::Ok(SpanToken {
             span: Span { ptr, span: res.1 },

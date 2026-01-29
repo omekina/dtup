@@ -41,6 +41,11 @@ impl Pos {
             col,
         }
     }
+
+    pub fn offset(mut self, offset: &usize) -> Self {
+        self.col += offset;
+        self
+    }
 }
 
 impl ReportFilePointer for Pos {

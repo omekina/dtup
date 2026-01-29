@@ -3,19 +3,30 @@ use crate::report::Report;
 pub enum Errors {
     /// An invalid byte was encountered - resulting in an invalid UTF-8 character.
     InvalidUtf8Character,
+    /// Unknown character
+    InvalidCharacter,
     /// Invalid symbol inside a numeric literal
     InvalidNumericLiteral,
     InvalidStringLiteral,
     UnclosedBlockComment,
+    UnexpectedEof,
+    UnexpectedToken,
+    InvalidNodeAddress,
+    InvalidNodeName,
 }
 
 impl Errors {
     pub fn message(&self) -> String {
         match self {
             Self::InvalidUtf8Character => "invalid UTF-8 character",
+            Self::InvalidCharacter => "Unknown character encountered",
             Self::InvalidNumericLiteral => "invalid numeric literal",
             Self::InvalidStringLiteral => "invalid string literal",
             Self::UnclosedBlockComment => "unclosed block comment",
+            Self::UnexpectedEof => "unxpected end",
+            Self::UnexpectedToken => "unexpected token",
+            Self::InvalidNodeAddress => "invalid node address",
+            Self::InvalidNodeName => "invalid node name",
         }
         .to_string()
     }
@@ -23,9 +34,14 @@ impl Errors {
     pub fn id(&self) -> String {
         match self {
             Self::InvalidUtf8Character => "E001".to_string(),
-            Self::InvalidNumericLiteral => "E002".to_string(),
-            Self::InvalidStringLiteral => "E003".to_string(),
-            Self::UnclosedBlockComment => "E004".to_string(),
+            Self::InvalidCharacter => "E002".to_string(),
+            Self::InvalidNumericLiteral => "E003".to_string(),
+            Self::InvalidStringLiteral => "E004".to_string(),
+            Self::UnclosedBlockComment => "E005".to_string(),
+            Self::UnexpectedEof => "E006".to_string(),
+            Self::UnexpectedToken => "E007".to_string(),
+            Self::InvalidNodeAddress => "E008".to_string(),
+            Self::InvalidNodeName => "E009".to_string(),
         }
     }
 }

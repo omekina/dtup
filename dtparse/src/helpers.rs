@@ -21,9 +21,10 @@ pub fn parse(filepath: &Path) -> StreamResult<Vec<SpanToken>, StreamedError<Pars
         PrependableStream::new(pointer_tracker);
     let mut tokens = Vec::new();
     for v in Tokenizer::new(&mut prependable_stream) {
-        match v.into() {
-            Ok(v) => tokens.push(v),
-            Err(e) => return e,
+        match v {
+            StreamResult::Ok(v) => tokens.push(v),
+            StreamResult::IoError(e) => panic!("io error: {:?}", e),
+            StreamResult::ProcessingError(e) => panic!("processing error: {:?}", e),
         }
     }
     StreamResult::Ok(tokens)
