@@ -48,7 +48,7 @@ pub enum Statement {
     PropertyAssignment {
         property_name: (String, Span),
         eq: Span,
-        expr: Expression,
+        expr: Vec<Item>,
     },
     FlagProperty {
         property_name: (String, Span),
@@ -62,21 +62,67 @@ pub enum ArrayItem<T> {
 }
 
 #[derive(Debug)]
+pub enum NumericLiteral {
+    Decimal(String),
+    Hexadecimal(String),
+}
+
+#[derive(Debug)]
+pub enum ArithmeticOperation {
+    Addition,
+    Subtraction,
+    Multiplication,
+    Division,
+    Modulo,
+}
+
+#[derive(Debug)]
+pub enum RelationalOperation {
+    Equal,
+    NotEqual,
+    GreaterThan,
+    LessThan,
+    GreaterOrEqual,
+    LessOrEqual,
+}
+
+#[derive(Debug)]
+pub enum LogicalOperation {
+    And,
+    Or,
+    Not,
+}
+
+#[derive(Debug)]
 pub enum Expression {
-    ArrayEnclosed(Box<Expression>),
-    CommaSeparated {
-        contents: Vec<ArrayItem<Expression>>,
+    NumericLiteral(NumericLiteral),
+    ArithmeticOperation {
+        left: Box<Expression>,
+        right: Box<Expression>,
+        operator: ArithmeticOperation,
     },
-    NodeReference {
-        to: (NodeReference, Span),
+    RelationalOperation {
+        left: Box<Expression>,
+        right: Box<Expression>,
+        operator: RelationalOperation,
     },
+    LogicalOperation {
+        left: Box<Expression>,
+        right: Box<Expression>,
+        operator: LogicalOperation,
+    },
+    TernaryOperation {
+        if_expr: Box<Expression>,
+        then_expr: Box<Expression>,
+        else_expr: Box<Expression>,
+    },
+}
+
+#[derive(Debug)]
+pub enum Item {
+    NumericLiteral(Vec<(NumericLiteral, Span)>),
+    ByteString(Vec<(String, Span)>),
     String((String, Span)),
-    /// Not converted to the actual values (the integer is a numeric representation of the string)
-    ByteString {
-        opening: Span,
-        closing: Span,
-        contents: Vec<ArrayItem<(u64, Span)>>,
-    },
 }
 
 #[derive(Debug)]
@@ -133,13 +179,41 @@ fn skip_while<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerS
     skipped
 }
 
+fn skip_opt<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
+    source: &mut I,
+    skipper: impl Fn(&TokenizerStreamItem) -> bool,
+) -> usize {
+    if let Some(v) = source.next() {
+        if !skipper(&v) {
+            source.push(v);
+            0
+        } else {
+            1
+        }
+    } else {
+        0
+    }
+}
+
 macro_rules! auto_parser {
-    (skip $name: ident, $skipper: expr) => {
+    (_skip_wrapper $name: ident, $skipper: expr, $fn: ident) => {
         fn $name<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
             source: &mut I,
         ) -> usize {
-            skip_while(source, $skipper)
+            $fn(source, $skipper)
         }
+    };
+
+    (_skip_inline_wrapper $source: expr, $skipper: expr, $fn: ident) => {
+        $fn($source, $skipper)
+    };
+
+    (skip $name: ident, $skipper: expr) => {
+        auto_parser!(_skip_wrapper $name, $skipper, skip_while);
+    };
+
+    (skip_single $name: ident, $skipper: expr) => {
+        auto_parser!(_skip_wrapper $name, $skipper, skip_opt);
     };
 
     (skip_tokens $name: ident, $skipper: expr) => {
@@ -149,6 +223,24 @@ macro_rules! auto_parser {
                 _ => false,
             }
         });
+    };
+
+    (skip_token $name: ident, $skipper: expr) => {
+        auto_parser!(skip_single $name, |v| {
+            match v {
+                StreamResult::Ok(SpanToken { token, .. }) => $skipper(token),
+                _ => false,
+            }
+        })
+    };
+
+    (skip_token_inline $source: expr, $skipper: expr) => {
+        auto_parser!(_skip_inline_wrapper $source, |v| {
+            match v {
+                StreamResult::Ok(SpanToken { token, .. }) => $skipper(token),
+                _ => false,
+            }
+        }, skip_opt)
     };
 }
 
@@ -571,6 +663,18 @@ fn consume_node_address<
     name: (ExtendedIdent, Span),
     at: SpanToken,
 ) -> StreamItem<LexerItem> {
+    macro_rules! skip_stmt_cont {
+        () => {
+            auto_parser!(skip_token_inline source, |v| {
+                match v {
+                    &(Token::Equal | Token::GroupOpening(GroupType::Brace) | Token::Semicolon) => {
+                        true
+                    },
+                    _ => false,
+                }
+            });
+        };
+    }
     def_try_yield!(source);
     skip_block_comments(source);
     let address = try_yield!(at.span);
@@ -595,11 +699,13 @@ fn consume_node_address<
         GenericLiteralType::HexadecimalNumeric { prefix: false }
         | GenericLiteralType::DecimalNumeric => {}
         GenericLiteralType::HexadecimalNumeric { prefix: true } => {
+            skip_stmt_cont!();
             return err!(cont [{ InvalidNodeAddress, [
                 ("node addresses must not contain a prefix", 2, address_span.ptr)
             ]}]);
         }
         _ => {
+            skip_stmt_cont!();
             return err!(cont [{ InvalidNodeAddress, [
                 ("because this implies a node with an address", at.span),
                 ("this must be a hexadecimal literal", address_span),
@@ -610,7 +716,7 @@ fn consume_node_address<
     skip_possible(source);
     let opening = try_yield!(address_span);
     match opening.token {
-        Token::Equal => {
+        Token::Equal | Token::Semicolon => {
             return err!(cont [{ UnexpectedToken, [
                 ("unsure what this is meant to be", name.1),
                 ("this implies a node with an address", at.span),
@@ -639,4 +745,14 @@ fn consume_node_address<
         prevent_compilation: reports.is_some(),
         reports,
     })
+}
+
+fn consume_expression<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
+    source: &mut I,
+    name: (ExtendedIdent, Span),
+    at: SpanToken,
+) -> StreamItem<LexerItem> {
+    todo!()
 }
