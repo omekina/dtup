@@ -15,6 +15,8 @@ pub enum Errors {
     InvalidNodeName,
     InvalidLabelName,
     UnexpectedWhitespace,
+    MissingParentheses,
+    UnmatchedDelimiter,
 }
 
 impl Errors {
@@ -31,6 +33,8 @@ impl Errors {
             Self::InvalidNodeName => "invalid node name",
             Self::InvalidLabelName => "invalid label name",
             Self::UnexpectedWhitespace => "unexpected whitespace or comment",
+            Self::MissingParentheses => "missing parentheses",
+            Self::UnmatchedDelimiter => "unmatched delimiter",
         }
         .to_string()
     }
@@ -48,6 +52,8 @@ impl Errors {
             Self::InvalidNodeName => "E009",
             Self::InvalidLabelName => "E010",
             Self::UnexpectedWhitespace => "E011",
+            Self::MissingParentheses => "E012",
+            Self::UnmatchedDelimiter => "E013",
         }
         .to_string()
     }

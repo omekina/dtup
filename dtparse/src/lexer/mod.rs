@@ -11,8 +11,11 @@ use crate::{
     },
 };
 
+mod expressions;
+
 type StreamItem<T> = StreamResult<T, StreamedError<ParseErrorReport>>;
 type TokenizerStreamItem = StreamItem<SpanToken>;
+type MultiErrorItem<T> = StreamResult<T, StreamedError<Vec<ParseErrorReport>>>;
 
 #[derive(Debug)]
 pub enum LexerToken {
@@ -90,12 +93,21 @@ pub enum RelationalOperation {
 pub enum LogicalOperation {
     And,
     Or,
-    Not,
+}
+
+#[derive(Debug)]
+pub enum BitwiseOperation {
+    And,
+    Or,
+    Xor,
+    LeftShift,
+    RightShift,
 }
 
 #[derive(Debug)]
 pub enum Expression {
-    NumericLiteral(NumericLiteral),
+    Reference((Reference, Span)),
+    NumericLiteral((NumericLiteral, Span)),
     ArithmeticOperation {
         left: Box<Expression>,
         right: Box<Expression>,
@@ -111,6 +123,13 @@ pub enum Expression {
         right: Box<Expression>,
         operator: LogicalOperation,
     },
+    LogicalNot(Box<Expression>),
+    BitwiseOperation {
+        left: Box<Expression>,
+        right: Box<Expression>,
+        operator: BitwiseOperation,
+    },
+    BitwiseNot(Box<Expression>),
     TernaryOperation {
         if_expr: Box<Expression>,
         then_expr: Box<Expression>,
@@ -120,14 +139,15 @@ pub enum Expression {
 
 #[derive(Debug)]
 pub enum Item {
-    NumericLiteral(Vec<(NumericLiteral, Span)>),
-    ByteString(Vec<(String, Span)>),
+    Reference((Reference, Span)),
+    NumericLiteral(Vec<Expression>),
+    ByteString(Vec<String>),
     String((String, Span)),
 }
 
 #[derive(Debug)]
-pub enum NodeReference {
-    Ident(String),
+pub enum Reference {
+    Label(String),
     NodePath(Vec<String>),
 }
 
@@ -454,14 +474,24 @@ macro_rules! err {
         StreamResult::ProcessingError(StreamedError::CanContinue(err!(@report $($t)*)))
     };
 
+    (cont_multi [$($t: tt)*]) => {
+        StreamResult::ProcessingError(StreamedError::CanContinue(vec![err!(@report $($t)*)]))
+    };
+
     (end [$($t: tt)*]) => {
         StreamResult::ProcessingError(StreamedError::ShouldEnd(err!(@report $($t)*)))
     };
 
+    (end_multi [$($t: tt)*]) => {
+        StreamResult::ProcessingError(StreamedError::ShouldEnd(vec![err!(@report $($t)*)]))
+    };
+
     (raw [$($t: tt)*]) => {
         err!(@report $($t)*)
-    }
+    };
 }
+
+pub(self) use err;
 
 enum StatementStart {
     Label {
@@ -745,14 +775,4 @@ fn consume_node_address<
         prevent_compilation: reports.is_some(),
         reports,
     })
-}
-
-fn consume_expression<
-    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
->(
-    source: &mut I,
-    name: (ExtendedIdent, Span),
-    at: SpanToken,
-) -> StreamItem<LexerItem> {
-    todo!()
 }
