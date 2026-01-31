@@ -93,9 +93,10 @@ pub struct Comment {
     pub content: String,
 }
 
-impl ToString for Comment {
-    fn to_string(&self) -> String {
-        format!(
+impl std::fmt::Display for Comment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
             "{}{}{}",
             self.of_type.start_delimiter(),
             self.content,
@@ -132,9 +133,12 @@ pub struct WhitespaceToken {
     pub count: usize,
 }
 
-impl ToString for WhitespaceToken {
-    fn to_string(&self) -> String {
-        self.of_type.to_string().repeat(self.count)
+impl std::fmt::Display for WhitespaceToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for _ in 0..self.count {
+            write!(f, "{}", self.of_type)?;
+        }
+        Ok(())
     }
 }
 
@@ -176,12 +180,12 @@ pub enum WhitespaceTokenType {
     Newline,
 }
 
-impl ToString for WhitespaceTokenType {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for WhitespaceTokenType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Space => " ".to_string(),
-            Self::Tab => "\t".to_string(),
-            Self::Newline => "\n".to_string(),
+            Self::Space => write!(f, " "),
+            Self::Tab => write!(f, "\t"),
+            Self::Newline => writeln!(f),
         }
     }
 }
@@ -786,26 +790,6 @@ where
     }
 }
 
-fn skip_while<T, I>(source: &mut I, predicate: impl Fn(&T) -> bool) -> SourceResult<usize>
-where
-    I: Iterator<Item = SourceResult<T>> + StreamPrepend<SourceResult<T>>,
-{
-    let mut res = 0;
-    while let Some(v) = source.next() {
-        let v = match v.into() {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        if predicate(&v) {
-            res += 1;
-        } else {
-            source.push(StreamResult::Ok(v));
-            break;
-        }
-    }
-    StreamResult::Ok(res)
-}
-
 fn count_matching<I>(target: &char, source: &mut I) -> SourceResult<usize>
 where
     I: Iterator<Item = SourceResult<char>> + StreamPrepend<SourceResult<char>>,
@@ -824,6 +808,57 @@ where
         }
     }
     StreamResult::Ok(res)
+}
+
+pub struct ErrorSkipper<'a, I> {
+    source: &'a mut I,
+    errors: Vec<ParseErrorReport>,
+    has_ended: bool,
+}
+
+impl<'a, I> ErrorSkipper<'a, I> {
+    pub fn new(source: &'a mut I) -> Self {
+        Self {
+            source,
+            errors: Vec::default(),
+            has_ended: false,
+        }
+    }
+}
+
+impl<I> ErrorSkipper<'_, I> {
+    pub fn take_errors(&mut self) -> Vec<ParseErrorReport> {
+        std::mem::take(&mut self.errors)
+    }
+}
+
+impl<I> Iterator for ErrorSkipper<'_, I>
+where
+    I: Iterator<Item = TokenizerResult<SpanToken>>,
+{
+    type Item = SourceResult<SpanToken>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.has_ended {
+            return None;
+        }
+        loop {
+            match self.source.next() {
+                Some(StreamResult::Ok(v)) => break Some(StreamResult::Ok(v)),
+                Some(StreamResult::IoError(e)) => break Some(StreamResult::IoError(e)),
+                Some(StreamResult::ProcessingError(StreamedError::CanContinue(e))) => {
+                    self.errors.push(e);
+                }
+                Some(StreamResult::ProcessingError(StreamedError::ShouldEnd(e))) => {
+                    break Some(StreamResult::ProcessingError(e));
+                }
+                None => {
+                    self.has_ended = true;
+                    None?
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -86,9 +86,9 @@ impl BasicFileReader {
         let mut read = file.read(&mut buf)?;
         while read > 0 {
             let mut trim_to = read;
-            for i in 0..read {
-                if !predicate(buf[i]) {
-                    trim_to = i;
+            for (idx, item) in buf.iter().enumerate().take(read) {
+                if !predicate(*item) {
+                    trim_to = idx;
                     break;
                 }
             }
@@ -116,7 +116,7 @@ impl FileReader for BasicFileReader {
                 self.handles.get_mut(file).unwrap()
             }
         };
-        Self::seek(&mut file, *line.line_start_byte())?;
+        Self::seek(file, *line.line_start_byte())?;
         Ok(MaybeOwnedString::Owned(Self::read_line(file)?))
     }
 }

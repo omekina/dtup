@@ -49,7 +49,7 @@ where
             return None;
         }
         let next = self.source.next();
-        if let None = next {
+        if next.is_none() {
             self.has_ended = true;
         }
         next
@@ -82,7 +82,7 @@ impl<T, I: PointerStream, const BACKLOG_SIZE: usize> PrependablePointer
     for PrependableStream<T, I, BACKLOG_SIZE>
 {
     fn last_ptr(&self) -> Pos {
-        if self.backlog.len() > 0 {
+        if !self.backlog.is_empty() {
             panic!("ptr getter called on a stream with non-empty backlog");
         }
         self.source.prev_ptr()
@@ -106,10 +106,10 @@ pub(crate) fn consume_while<T>(
                 break;
             }
         }
-        if let Some(limit) = limit {
-            if res.len() > limit {
-                return Err(());
-            }
+        if let Some(limit) = limit
+            && res.len() > limit
+        {
+            return Err(());
         }
     }
     Ok(res)

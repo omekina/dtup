@@ -1,23 +1,73 @@
 use crate::{
-    StreamResult, StreamedError,
     lexer::{
-        ArithmeticOperation, BitwiseOperation, Expression, LexerItem, LogicalOperation,
-        MultiErrorItem, RelationalOperation, TokenizerStreamItem, err,
+        ArithmeticOperation, BitwiseOperation, Expression, LogicalOperation, MultiErrorItem,
+        NumericLiteral, Reference, RelationalOperation, StreamItem, TokenizerStreamItem,
+        consume_any_ident, deref_node_name, err, skip_possible, warning,
     },
     report::{
         PrimitiveMainMessage, PrimitiveReport, PrimitiveReportMessage, PrimitiveReportSegment,
         ReportInlineMessage,
     },
-    result::{Errors, ParseErrorReport},
+    result::{Errors, ParseErrorReport, StreamResult, StreamedError, Warnings},
     stream_utils::StreamPrepend,
-    tokenizer::Span,
+    tokenizer::{
+        ArithmeticOperator, BitwiseOperator, GenericLiteral, GenericLiteralType, GroupType,
+        LiteralToken, LogicalOperator, RelationalOperator, Span, Token,
+    },
 };
 
+#[derive(Debug)]
 enum BinaryOperation {
-    ArithmeticOperator(ArithmeticOperation),
-    RelationalOperator(RelationalOperation),
-    LogicalOperator(LogicalOperation),
-    BitwiseOperator(BitwiseOperation),
+    Arithmetic(ArithmeticOperation),
+    Relational(RelationalOperation),
+    Logical(LogicalOperation),
+    Bitwise(BitwiseOperation),
+}
+
+impl From<ArithmeticOperator> for BinaryOperation {
+    fn from(value: ArithmeticOperator) -> Self {
+        match value {
+            ArithmeticOperator::Plus => Self::Arithmetic(ArithmeticOperation::Addition),
+            ArithmeticOperator::Dash => Self::Arithmetic(ArithmeticOperation::Subtraction),
+            ArithmeticOperator::Asterisk => Self::Arithmetic(ArithmeticOperation::Multiplication),
+            ArithmeticOperator::Percent => Self::Arithmetic(ArithmeticOperation::Modulo),
+        }
+    }
+}
+
+impl From<RelationalOperator> for BinaryOperation {
+    fn from(value: RelationalOperator) -> Self {
+        match value {
+            RelationalOperator::Equal => Self::Relational(RelationalOperation::Equal),
+            RelationalOperator::NotEqual => Self::Relational(RelationalOperation::NotEqual),
+            RelationalOperator::LessOrEqual => Self::Relational(RelationalOperation::LessOrEqual),
+            RelationalOperator::GreaterOrEqual => {
+                Self::Relational(RelationalOperation::GreaterOrEqual)
+            }
+        }
+    }
+}
+
+impl From<LogicalOperator> for BinaryOperation {
+    fn from(value: LogicalOperator) -> Self {
+        match value {
+            LogicalOperator::Or => Self::Logical(LogicalOperation::Or),
+            LogicalOperator::And => Self::Logical(LogicalOperation::And),
+            LogicalOperator::Not => panic!("invalid conversion of not operator"),
+        }
+    }
+}
+
+impl From<BitwiseOperator> for BinaryOperation {
+    fn from(value: BitwiseOperator) -> Self {
+        match value {
+            BitwiseOperator::Or => Self::Bitwise(BitwiseOperation::Or),
+            BitwiseOperator::Xor => Self::Bitwise(BitwiseOperation::Xor),
+            BitwiseOperator::LeftShift => Self::Bitwise(BitwiseOperation::LeftShift),
+            BitwiseOperator::RightShift => Self::Bitwise(BitwiseOperation::RightShift),
+            BitwiseOperator::Not => panic!("invalid conversion of bitwise not operator"),
+        }
+    }
 }
 
 trait MergeBinaryOperation {
@@ -74,12 +124,7 @@ impl MergeBinaryOperation for BinaryOperation {
         macro_rules! autodef {
             ($($v: ident),*) => { match self { $(Self::$v(v) => v.merge(left, right)),* } };
         }
-        autodef!(
-            ArithmeticOperator,
-            RelationalOperator,
-            LogicalOperator,
-            BitwiseOperator
-        )
+        autodef!(Arithmetic, Relational, Logical, Bitwise)
     }
 }
 
@@ -106,15 +151,11 @@ impl BinaryOperationPriority for BinaryOperation {
         macro_rules! autodef {
             ($($v: ident),*) => { match self { $(Self::$v(v) => v.priority()),* } };
         }
-        autodef!(
-            LogicalOperator,
-            BitwiseOperator,
-            ArithmeticOperator,
-            RelationalOperator
-        )
+        autodef!(Logical, Bitwise, Arithmetic, Relational)
     }
 }
 
+#[derive(Debug)]
 struct BinaryOperationParsingItem {
     operation: BinaryOperation,
     operator_span: Span,
@@ -131,7 +172,7 @@ impl BinaryOperationParsingItem {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct BinaryOperationParsingStack {
     stack: Vec<BinaryOperationParsingItem>,
 }
@@ -165,6 +206,10 @@ impl BinaryOperationParsingStack {
         }
         tmp
     }
+
+    fn last_operator_span(&self) -> Option<Span> {
+        Some(self.stack.last()?.operator_span.clone())
+    }
 }
 
 #[cfg(test)]
@@ -183,11 +228,11 @@ mod binary_operation_parsing {
         let tokens = [
             (
                 token!(num_lit 10),
-                BinaryOperation::ArithmeticOperator(ArithmeticOperation::Addition),
+                BinaryOperation::Arithmetic(ArithmeticOperation::Addition),
             ),
             (
                 token!(num_lit 2),
-                BinaryOperation::ArithmeticOperator(ArithmeticOperation::Addition),
+                BinaryOperation::Arithmetic(ArithmeticOperation::Addition),
             ),
         ];
 
@@ -215,11 +260,11 @@ mod binary_operation_parsing {
         let tokens = [
             (
                 token!(num_lit 10),
-                BinaryOperation::ArithmeticOperator(ArithmeticOperation::Addition),
+                BinaryOperation::Arithmetic(ArithmeticOperation::Addition),
             ),
             (
                 token!(num_lit 2),
-                BinaryOperation::ArithmeticOperator(ArithmeticOperation::Multiplication),
+                BinaryOperation::Arithmetic(ArithmeticOperation::Multiplication),
             ),
         ];
 
@@ -247,11 +292,11 @@ mod binary_operation_parsing {
         let tokens = [
             (
                 token!(num_lit 10),
-                BinaryOperation::ArithmeticOperator(ArithmeticOperation::Multiplication),
+                BinaryOperation::Arithmetic(ArithmeticOperation::Multiplication),
             ),
             (
                 token!(num_lit 2),
-                BinaryOperation::ArithmeticOperator(ArithmeticOperation::Addition),
+                BinaryOperation::Arithmetic(ArithmeticOperation::Addition),
             ),
         ];
 
@@ -273,6 +318,679 @@ mod binary_operation_parsing {
             }
         );
     }
+
+    #[test]
+    fn merge_empty() {
+        let mut stack = BinaryOperationParsingStack::default();
+        assert_eq!(stack.merge(Expression::Invalid), Expression::Invalid);
+    }
+}
+
+#[derive(Debug)]
+enum TernaryParsingStaging {
+    StagingThenExpression {
+        if_operator: Span,
+        if_expr: Expression,
+        then_expr: BinaryOperationParsingStack,
+    },
+    StagingElseExpression {
+        if_operator: Span,
+        if_expr: Expression,
+        then_expr: Expression,
+        else_operator: Span,
+        else_expr: BinaryOperationParsingStack,
+    },
+}
+
+enum TernaryElseResult {
+    Continue(TernaryParsingStaging),
+    End {
+        result: Expression,
+        warnings: Vec<ParseErrorReport>,
+    },
+}
+
+impl TernaryParsingStaging {
+    fn new(if_operator: Span, if_expr: Expression) -> Self {
+        Self::StagingThenExpression {
+            if_operator,
+            if_expr,
+            then_expr: Default::default(),
+        }
+    }
+
+    fn take_with(&mut self, with: Expression) -> Expression {
+        match self {
+            Self::StagingThenExpression { then_expr, .. } => then_expr.merge(with),
+            Self::StagingElseExpression { else_expr, .. } => else_expr.merge(with),
+        }
+    }
+
+    /// If this expression already has an else delimiter, this assumes that it is a delimiter for
+    /// another ternary expression.
+    fn else_delimiter(self, finish_with: Expression, else_operator: &Span) -> TernaryElseResult {
+        match self {
+            Self::StagingThenExpression {
+                if_operator,
+                if_expr,
+                mut then_expr,
+            } => {
+                let then_expr = then_expr.merge(finish_with);
+                TernaryElseResult::Continue(Self::StagingElseExpression {
+                    if_operator,
+                    if_expr,
+                    then_expr,
+                    else_operator: else_operator.clone(),
+                    else_expr: Default::default(),
+                })
+            }
+            Self::StagingElseExpression {
+                if_operator,
+                if_expr,
+                then_expr,
+                else_operator,
+                else_expr,
+            } => {
+                let (result, warnings) = Self::finish(
+                    if_operator,
+                    if_expr,
+                    then_expr,
+                    else_operator,
+                    else_expr,
+                    finish_with,
+                );
+                TernaryElseResult::End { result, warnings }
+            }
+        }
+    }
+
+    /// Will produce warnings if the values are not nested parentheses or numeric literals
+    fn finish(
+        if_operator: Span,
+        if_expr: Expression,
+        then_expr: Expression,
+        else_operator: Span,
+        mut else_expr: BinaryOperationParsingStack,
+        finish_with: Expression,
+    ) -> (Expression, Vec<ParseErrorReport>) {
+        let (if_expr, then_expr) = (Box::new(if_expr), Box::new(then_expr));
+        let else_expr = Box::new(else_expr.merge(finish_with));
+        let mut warnings = Vec::new();
+        Self::check_nested(
+            "the expression before this is not wrapped in parentheses",
+            &if_operator,
+            &if_expr,
+        )
+        .map(|w| warnings.push(w));
+        Self::check_nested_after(&if_operator, &then_expr).map(|w| warnings.push(w));
+        Self::check_nested_after(&else_operator, &else_expr).map(|w| warnings.push(w));
+        (
+            Expression::TernaryOperation {
+                if_expr,
+                then_expr,
+                else_expr,
+            },
+            warnings,
+        )
+    }
+
+    /// Checks if the expression is a numeric literal or a reference, otherwise generates a warning.
+    fn check_nested(
+        msg: &'static str,
+        operator_span: &Span,
+        expr: &Expression,
+    ) -> Option<ParseErrorReport> {
+        match expr {
+            Expression::NumericLiteral(_) | Expression::Reference(_) => None,
+            _ => Some(warning!({ UnenclosedNestedExpression, [
+                (msg.to_string(), operator_span.clone()),
+            ]})),
+        }
+    }
+
+    fn check_nested_after(operator_span: &Span, expr: &Expression) -> Option<ParseErrorReport> {
+        Self::check_nested(
+            "the expression after this is not wrapped in parentheses",
+            operator_span,
+            expr,
+        )
+    }
+
+    /// # Errors
+    /// Returns an error if operator's span if this expression can't be finished yet because the if
+    /// expression has not yet been finished.
+    fn end(
+        self,
+        finish_with: Expression,
+        finish_trigger: &Span,
+    ) -> Result<(Expression, Vec<ParseErrorReport>), ParseErrorReport> {
+        match self {
+            Self::StagingThenExpression { if_operator, .. } => {
+                Err(err!(raw [{ InvalidTernaryOperator, [
+                    ("this ternary operator must contain an else expression", if_operator),
+                    ("before here", finish_trigger.clone()),
+                ]}]))
+            }
+            Self::StagingElseExpression {
+                if_operator,
+                if_expr,
+                then_expr,
+                else_operator,
+                else_expr,
+            } => Ok(Self::finish(
+                if_operator,
+                if_expr,
+                then_expr,
+                else_operator,
+                else_expr,
+                finish_with,
+            )),
+        }
+    }
+
+    fn push(&mut self, operator: BinaryOperation, span: Span, middle: Expression) {
+        match self {
+            Self::StagingThenExpression { then_expr, .. } => then_expr.push(operator, span, middle),
+            Self::StagingElseExpression { else_expr, .. } => else_expr.push(operator, span, middle),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum UnaryOperation {
+    BitwiseNot,
+    LogicalNot,
+}
+
+#[derive(Debug)]
+enum GroupParsingStackItem {
+    Paren {
+        left: Span,
+        unary_operations: Vec<UnaryOperation>,
+        content: BinaryOperationParsingStack,
+    },
+    Ternary {
+        staging: TernaryParsingStaging,
+    },
+}
+
+impl GroupParsingStackItem {
+    fn take_with(&mut self, with: Expression) -> Expression {
+        match self {
+            Self::Paren { content, .. } => content.merge(with),
+            Self::Ternary { staging } => staging.take_with(with),
+        }
+    }
+
+    fn push(&mut self, expr: Expression, operator: BinaryOperation, operator_span: Span) {
+        match self {
+            Self::Paren { content, .. } => content.push(operator, operator_span, expr),
+            Self::Ternary { staging } => staging.push(operator, operator_span, expr),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct GroupParsingStack {
+    stack: Vec<GroupParsingStackItem>,
+}
+
+type WarningReports = Vec<ParseErrorReport>;
+type ErrorReports = Vec<ParseErrorReport>;
+type HasAllClosed = bool;
+
+#[derive(Debug, PartialEq)]
+enum GroupParsingStackPopResult {
+    Continue(Expression),
+    Ended(Expression),
+}
+
+fn nest_unary(inner: Expression, mut unary_operators: Vec<UnaryOperation>) -> Expression {
+    let mut tmp = inner;
+    while let Some(op) = unary_operators.pop() {
+        match op {
+            UnaryOperation::BitwiseNot => tmp = Expression::BitwiseNot(Box::new(tmp)),
+            UnaryOperation::LogicalNot => tmp = Expression::LogicalNot(Box::new(tmp)),
+        }
+    }
+    tmp
+}
+
+impl GroupParsingStack {
+    fn new(start_paren: Span) -> Self {
+        Self {
+            stack: Vec::from([GroupParsingStackItem::Paren {
+                left: start_paren,
+                unary_operations: Vec::default(),
+                content: Default::default(),
+            }]),
+        }
+    }
+
+    fn start_paren(&mut self, span: Span, with_unary_chain: Vec<UnaryOperation>) {
+        self.stack.push(GroupParsingStackItem::Paren {
+            left: span,
+            unary_operations: with_unary_chain,
+            content: Default::default(),
+        });
+    }
+
+    fn start_ternary(&mut self, with: Expression, operator: Span) {
+        let left = match self.stack.last_mut() {
+            Some(v) => v.take_with(with),
+            None => with,
+        };
+        self.stack.push(GroupParsingStackItem::Ternary {
+            staging: TernaryParsingStaging::new(operator, left),
+        });
+    }
+
+    /// # Errors
+    /// Errors if there is an unclosed ternary operator before a parenthesis.
+    /// Error structure is: (errors, all_closed)
+    fn end_paren(
+        &mut self,
+        span: Span,
+        with: Expression,
+    ) -> (GroupParsingStackPopResult, WarningReports, ErrorReports) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let mut tmp = with;
+        while let Some(v) = self.stack.pop() {
+            tmp = match v {
+                GroupParsingStackItem::Paren {
+                    mut content,
+                    unary_operations,
+                    left: _,
+                } => {
+                    let content = nest_unary(content.merge(tmp), unary_operations);
+                    if self.stack.is_empty() {
+                        return (GroupParsingStackPopResult::Ended(content), warnings, errors);
+                    } else {
+                        return (
+                            GroupParsingStackPopResult::Continue(content),
+                            warnings,
+                            errors,
+                        );
+                    }
+                }
+                GroupParsingStackItem::Ternary { staging } => {
+                    let end = staging.end(tmp, &span);
+                    match end {
+                        Ok((r, w)) => {
+                            warnings.extend(w.into_iter());
+                            r
+                        }
+                        Err(e) => {
+                            errors.push(e);
+                            Expression::Invalid
+                        }
+                    }
+                }
+            };
+        }
+        panic!("can't pop a parenthesis on an empty stack");
+    }
+
+    fn ternary_else(
+        &mut self,
+        span: Span,
+        with: Expression,
+    ) -> Result<WarningReports, ParseErrorReport> {
+        let mut result_warnings = Vec::new();
+        let mut tmp = with;
+        loop {
+            match self.stack.last() {
+                Some(GroupParsingStackItem::Paren { left, .. }) => {
+                    return Err(err!(raw [{ InvalidTernaryOperator, [
+                        ("what ternary operator are you refering to?", span),
+                        ("there is no `?` since this", left.clone()),
+                    ] }]));
+                }
+                Some(GroupParsingStackItem::Ternary { .. }) => {}
+                None => panic!("can't pop a ternary operator on an empty stack"),
+            }
+            let Some(GroupParsingStackItem::Ternary { staging }) = self.stack.pop() else {
+                unreachable!();
+            };
+            match staging.else_delimiter(tmp, &span) {
+                TernaryElseResult::Continue(staging) => {
+                    self.stack.push(GroupParsingStackItem::Ternary { staging });
+                    return Ok(result_warnings);
+                }
+                TernaryElseResult::End { result, warnings } => {
+                    result_warnings.extend(warnings.into_iter());
+                    tmp = result;
+                }
+            }
+        }
+    }
+
+    fn push(&mut self, expr: Expression, operator: BinaryOperation, operator_span: Span) {
+        let Some(last) = self.stack.last_mut() else {
+            panic!("can't push on an empty stack");
+        };
+        last.push(expr, operator, operator_span);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn parenthesis_only() {
+        let mut stack = GroupParsingStack::new(Default::default());
+        let (res, warnings, errors) = stack.end_paren(Default::default(), Expression::Invalid);
+        assert_eq!(res, GroupParsingStackPopResult::Ended(Expression::Invalid));
+        assert!(warnings.is_empty());
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn single_ternary() {
+        let mut stack = GroupParsingStack::new(Default::default());
+        stack.start_ternary(Expression::Invalid, Default::default());
+        assert!(
+            stack
+                .ternary_else(Default::default(), Expression::Invalid)
+                .unwrap()
+                .is_empty()
+        );
+        let (res, warnings, errors) = stack.end_paren(Default::default(), Expression::Invalid);
+        assert_eq!(
+            res,
+            GroupParsingStackPopResult::Ended(Expression::TernaryOperation {
+                if_expr: Box::new(Expression::Invalid),
+                then_expr: Box::new(Expression::Invalid),
+                else_expr: Box::new(Expression::Invalid)
+            })
+        );
+        assert_eq!(warnings.len(), 3);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn nested_ternary_then() {
+        let mut stack = GroupParsingStack::new(Default::default());
+        stack.start_ternary(Expression::Invalid, Default::default());
+        stack.start_ternary(Expression::Invalid, Default::default());
+        assert!(
+            stack
+                .ternary_else(Default::default(), Expression::Invalid)
+                .unwrap()
+                .is_empty()
+        );
+        println!("{stack:?}");
+        let warnings = stack
+            .ternary_else(Default::default(), Expression::Invalid)
+            .unwrap();
+        assert_eq!(warnings.len(), 3);
+        let (res, warnings, errors) = stack.end_paren(Default::default(), Expression::Invalid);
+        assert_eq!(
+            res,
+            GroupParsingStackPopResult::Ended(Expression::TernaryOperation {
+                if_expr: Box::new(Expression::Invalid),
+                then_expr: Box::new(Expression::TernaryOperation {
+                    if_expr: Box::new(Expression::Invalid),
+                    then_expr: Box::new(Expression::Invalid),
+                    else_expr: Box::new(Expression::Invalid),
+                }),
+                else_expr: Box::new(Expression::Invalid),
+            })
+        );
+        assert_eq!(warnings.len(), 3);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn nested_ternary_else() {
+        let mut stack = GroupParsingStack::new(Default::default());
+        stack.start_ternary(Expression::Invalid, Default::default());
+        assert!(
+            stack
+                .ternary_else(Default::default(), Expression::Invalid)
+                .unwrap()
+                .is_empty()
+        );
+        stack.start_ternary(Expression::Invalid, Default::default());
+        assert!(
+            stack
+                .ternary_else(Default::default(), Expression::Invalid)
+                .unwrap()
+                .is_empty()
+        );
+        let (res, warnings, errors) = stack.end_paren(Default::default(), Expression::Invalid);
+        assert_eq!(
+            res,
+            GroupParsingStackPopResult::Ended(Expression::TernaryOperation {
+                if_expr: Box::new(Expression::Invalid),
+                then_expr: Box::new(Expression::Invalid),
+                else_expr: Box::new(Expression::TernaryOperation {
+                    if_expr: Box::new(Expression::Invalid),
+                    then_expr: Box::new(Expression::Invalid),
+                    else_expr: Box::new(Expression::Invalid),
+                }),
+            })
+        );
+        assert_eq!(warnings.len(), 6);
+        assert!(errors.is_empty());
+    }
+}
+
+macro_rules! def_try_yield {
+    (single_err $source: expr) => { def_try_yield!(@def $source, single) };
+    (multi_err $source: expr) => { def_try_yield!(@def $source, multi) };
+
+    (@def $source: expr, $mode: ident) => {
+        macro_rules! try_yield {
+            ($after: expr) => {
+                def_try_yield!(@inner_match $source, $after, $mode)
+            };
+        }
+    };
+
+    (@inner_should_end single $e: expr) => { $e };
+    (@inner_should_end multi $e: expr) => { vec![$e] };
+
+    (@inner_err_end multi $after: expr) => {
+        return err!(end_multi [{ UnexpectedEof, [
+            ("unexpected end after this", $after)
+        ]}])
+    };
+    (@inner_err_end single $after: expr) => {
+        return err!(end [{ UnexpectedEof, [
+            ("unexpected end after this", $after.clone())
+        ]}])
+    };
+
+    (@inner_match $source: expr, $after: expr, $mode: ident) => {
+        match $source.next() {
+            Some(StreamResult::Ok(v)) => v,
+            Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
+            Some(StreamResult::ProcessingError(e)) => {
+                (return StreamResult::ProcessingError(StreamedError::ShouldEnd(
+                    def_try_yield!(@inner_should_end $mode e)
+                )))
+            }
+            None => def_try_yield!(@inner_err_end $mode $after),
+        }
+    }
+}
+
+fn consume_label_reference<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
+    source: &mut I,
+    ampersand: Span,
+) -> MultiErrorItem<Expression> {
+    def_try_yield!(multi_err source);
+    let next = try_yield!(ampersand);
+    match next.token {
+        Token::GroupOpening(GroupType::Brace) => consume_node_reference(source, next.span),
+        Token::Literal(LiteralToken::Ident(GenericLiteral {
+            content,
+            of_type: GenericLiteralType::Ident,
+        })) => {
+            return StreamResult::Ok(Expression::Reference(Reference::Label(content, next.span)));
+        }
+        Token::Literal(LiteralToken::Ident(_)) => {
+            return err!(cont_multi [{ InvalidReference, [
+                ("this is not a valid label identifier", next.span),
+                ("expected a label identifier after this", ampersand),
+            ]}]);
+        }
+        _ => {
+            source.push(StreamResult::Ok(next));
+            return err!(cont_multi [{ InvalidReference, [
+                ("expected a valid label identifier after this", ampersand),
+            ]}]);
+        }
+    }
+}
+
+fn consume_node_ident<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
+    source: &mut I,
+) -> (String, Vec<ParseErrorReport>) {
+    let (ident, span) = consume_any_ident(source);
+    let (res, errors) = deref_node_name((ident, &span));
+    (res, errors.unwrap_or_default())
+}
+
+fn require_node_address<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
+    source: &mut I,
+    at: &Span,
+) -> StreamItem<(String, Span)> {
+    def_try_yield!(single_err source);
+    let token = try_yield!(at);
+    let literal = match token.token {
+        Token::Literal(v) => v,
+        _ => {
+            return err!(cont [{ InvalidNodePath, [
+                ("expected a valid hexadecimal literal after this", at.clone()),
+            ]}]);
+        }
+    };
+    let literal = match literal {
+        LiteralToken::Ident(GenericLiteral {
+            of_type: GenericLiteralType::HexadecimalNumeric { prefix: false },
+            content,
+        }) => content,
+        LiteralToken::Ident(GenericLiteral {
+            of_type: GenericLiteralType::HexadecimalNumeric { prefix: true },
+            ..
+        }) => {
+            return err!(cont [{ InvalidNodePath, [
+                ("node addresses must not have a prefix", 2, token.span.ptr),
+            ]}]);
+        }
+        _ => {
+            return err!(cont [{ InvalidNodePath, [
+                ("expected a valid hexadecimal literal after this", at.clone()),
+            ]}]);
+        }
+    };
+    StreamResult::Ok((literal, token.span))
+}
+
+fn consume_node_reference<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
+    source: &mut I,
+    opening: Span,
+) -> MultiErrorItem<Expression> {
+    def_try_yield!(multi_err source);
+    let mut res_errors = Vec::new();
+    let mut address = None;
+    let mut res = Vec::new();
+    let mut tmp = None;
+    let mut found_brace = false;
+    loop {
+        let token = match source.next() {
+            Some(StreamResult::Ok(v)) => v,
+            Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
+            Some(StreamResult::ProcessingError(e)) => {
+                return StreamResult::ProcessingError(StreamedError::ShouldEnd(vec![e]));
+            }
+            None => {
+                return err!(end_multi [{ UnmatchedDelimiter, [
+                    ("encountered an end of file this brace was closed", opening),
+                ]}]);
+            }
+        };
+        match token.token {
+            Token::GroupClosing(GroupType::Brace) => {
+                found_brace = true;
+                break;
+            }
+            Token::Slash => {
+                if tmp.is_none() {
+                    res_errors.push(err!(raw [{ InvalidNodePath, [
+                        (
+                            "node path segments can't be empty, like the one before this slash",
+                            token.span.clone()
+                        )
+                    ]}]));
+                }
+                res.push(tmp.take().unwrap());
+            }
+            Token::Literal(_)
+            | Token::Comma
+            | Token::Period
+            | Token::ArithmeticOperator(ArithmeticOperator::Plus | ArithmeticOperator::Dash)
+            | Token::Hash
+            | Token::QuestionMark => {
+                if tmp.is_some() {
+                    panic!("invalid tmp handling when consuming node path");
+                }
+                source.push(StreamResult::Ok(token));
+                let (ident, span) = consume_any_ident(source);
+                let (ident, errors) = deref_node_name((ident, &span));
+                if let Some(errors) = errors {
+                    res_errors.extend(errors.into_iter());
+                }
+                tmp = Some((ident, span));
+            }
+            Token::Comment(_) | Token::Whitespace(_) => {}
+            Token::At => {
+                address = match require_node_address(source, &token.span) {
+                    StreamResult::Ok(v) => Some(v),
+                    StreamResult::IoError(e) => return StreamResult::IoError(e),
+                    StreamResult::ProcessingError(StreamedError::ShouldEnd(e)) => {
+                        return StreamResult::ProcessingError(StreamedError::ShouldEnd(vec![e]));
+                    }
+                    StreamResult::ProcessingError(StreamedError::CanContinue(e)) => {
+                        res_errors.push(e);
+                        None
+                    }
+                };
+                break;
+            }
+            _ => {
+                res_errors.push(err!(raw [{ InvalidNodePath, [
+                    ("invalid symbol here", token.span),
+                ]}]));
+            }
+        }
+    }
+    if !found_brace {
+        skip_possible(source);
+        let address_span = address.as_ref().map(|v| v.1.clone()).unwrap();
+        match try_yield!(address_span).token {
+            Token::GroupClosing(GroupType::Brace) => {}
+            _ => {
+                return err!(end_multi [{ InvalidNodePath, [
+                    ("expected a closing brace to match this", opening.clone()),
+                    ("right after this node address", address_span),
+                ]}]);
+            }
+        }
+    }
+    StreamResult::Ok(Expression::Reference(Reference::NodePath(res, address)))
 }
 
 fn consume_expression<
@@ -280,45 +998,134 @@ fn consume_expression<
 >(
     source: &mut I,
     start: Span,
-) -> MultiErrorItem<LexerItem> {
-    let mut parens = vec![start];
-    macro_rules! unclosed_parens {
-        () => {
-            parens.iter().map(|v| {
-                err!(raw [{ UnmatchedDelimiter, [
-                    ("this parenthesis remains unclosed", v.clone())
-                ]}])
-            }).collect::<Vec<_>>()
-        };
-    }
-    macro_rules! req_next {
-        () => {
-            loop {
-                match source.next() {
-                    Some(StreamResult::Ok(v)) => break v,
-                    Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
-                    Some(StreamResult::ProcessingError(StreamedError::CanContinue(e))) => {
-                        errors.push(e);
-                    }
-                    Some(StreamResult::ProcessingError(StreamedError::ShouldEnd(e))) => {
-                        return StreamResult::ProcessingError(StreamedError::ShouldEnd(vec![e]));
-                    }
-                    None => return StreamResult::ProcessingError(
-                        StreamedError::ShouldEnd(unclosed_parens!())
-                    );
+) -> MultiErrorItem<(Expression, WarningReports, ErrorReports)> {
+    def_try_yield!(multi_err source);
+    let mut stack = GroupParsingStack::new(start.clone());
+    let mut res_errors = Vec::new();
+    let mut res_warnings = Vec::new();
+    let mut unary_operations = Vec::new();
+    let mut prev_expr = None;
+    macro_rules! req_prev_expr {
+        ($before: expr) => {{
+            if !unary_operations.is_empty() {
+                unary_operations.clear();
+                res_errors.push(err!(raw [{ InvalidExpression, [
+                    ("expected an expression before this, but got an operator", $before.clone()),
+                ]}]));
+            }
+            match prev_expr.take() {
+                Some(v) => v,
+                None => {
+                    res_errors.push(err!(raw [{ InvalidExpression, [
+                        ("expected an expression before this", $before.clone()),
+                    ]}]));
+                    Expression::Invalid
                 }
+            }
+        }};
+
+        (none $this: expr) => {
+            if prev_expr.is_some() {
+                res_errors.push(err!(raw [{ InvalidExpression, [
+                    ("expected an operator or an expression end instead of this", $this),
+                ]}]));
+                continue;
             }
         };
     }
-
-    let paren_depth = 1;
-    let stack = BinaryOperationParsingStack::default();
+    macro_rules! unary {
+        ($inner: expr) => {
+            if unary_operations.is_empty() {
+                $inner
+            } else {
+                nest_unary($inner, std::mem::take(&mut unary_operations))
+            }
+        };
+    }
     loop {
-        break;
-    }
+        skip_possible(source);
+        let token = try_yield!(start);
+        match token.token {
+            Token::Literal(LiteralToken::Ident(GenericLiteral {
+                content,
+                of_type: GenericLiteralType::HexadecimalNumeric { prefix },
+            })) => {
+                req_prev_expr!(none token.span);
+                if !prefix {
+                    res_errors.push(err!(raw [{ InvalidNumericLiteral, [
+                        ("hexadecimal literals in `<`, `>` enclosed integers must contain a prefix \
+                         (`0x`)", 1, token.span.ptr.clone()),
+                    ]}]));
+                }
+                prev_expr = Some(unary!(Expression::NumericLiteral((
+                    NumericLiteral::Hexadecimal(content),
+                    token.span
+                ))));
+            }
+            Token::Literal(LiteralToken::Ident(GenericLiteral {
+                content,
+                of_type: GenericLiteralType::DecimalNumeric,
+            })) => {
+                req_prev_expr!(none token.span);
+                prev_expr = Some(unary!(Expression::NumericLiteral((
+                    NumericLiteral::Decimal(content),
+                    token.span
+                ))));
+            }
+            Token::Literal(LiteralToken::String(_)) => {
+                res_errors.push(err!(raw [{ InvalidExpression, [
+                    ("did not expect a string inside an expression", token.span),
+                ]}]));
+            }
+            Token::GroupOpening(GroupType::Paren) => {
+                stack.start_paren(token.span, std::mem::take(&mut unary_operations));
+            }
+            Token::GroupClosing(GroupType::Paren) => {
+                let prev = req_prev_expr!(token.span);
+                let (res, warnings, errors) = stack.end_paren(token.span, prev);
+                res_warnings.extend(warnings.into_iter());
+                res_errors.extend(errors.into_iter());
+                match res {
+                    GroupParsingStackPopResult::Continue(v) => prev_expr = Some(v),
+                    GroupParsingStackPopResult::Ended(r) => {
+                        return StreamResult::Ok((r, res_warnings, res_errors));
+                    }
+                }
+            }
+            Token::QuestionMark => {
+                let prev = req_prev_expr!(token.span);
+                stack.start_ternary(prev, token.span);
+            }
+            Token::Colon => {
+                let prev = req_prev_expr!(token.span);
+                match stack.ternary_else(token.span, prev) {
+                    Ok(warnings) => res_warnings.extend(warnings.into_iter()),
+                    Err(error) => res_errors.push(error),
+                }
+            }
 
-    if paren_depth > 0 {
-        return StreamResult::ProcessingError(StreamedError::ShouldEnd(unclosed_parens!()));
+            Token::BitwiseOperator(BitwiseOperator::Not) => todo!(),
+            Token::LogicalOperator(LogicalOperator::Not) => todo!(),
+            Token::ArithmeticOperator(op) => {
+                let prev = req_prev_expr!(token.span);
+                stack.push(prev, op.into(), token.span);
+            }
+            Token::BitwiseOperator(op) => {
+                let prev = req_prev_expr!(token.span);
+                stack.push(prev, op.into(), token.span);
+            }
+            Token::LogicalOperator(op) => {
+                let prev = req_prev_expr!(token.span);
+                stack.push(prev, op.into(), token.span);
+            }
+            Token::RelationalOperator(op) => {
+                let prev = req_prev_expr!(token.span);
+                stack.push(prev, op.into(), token.span);
+            }
+
+            _ => res_errors.push(err!(raw [{ InvalidExpression, [
+                ("did not expect this token", token.span),
+            ]}])),
+        }
     }
-    todo!();
 }

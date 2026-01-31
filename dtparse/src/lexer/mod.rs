@@ -14,7 +14,7 @@ use crate::{
 mod expressions;
 
 type StreamItem<T> = StreamResult<T, StreamedError<ParseErrorReport>>;
-type TokenizerStreamItem = StreamItem<SpanToken>;
+type TokenizerStreamItem = StreamResult<SpanToken, ParseErrorReport>;
 type MultiErrorItem<T> = StreamResult<T, StreamedError<Vec<ParseErrorReport>>>;
 
 #[derive(Debug)]
@@ -106,7 +106,8 @@ pub enum BitwiseOperation {
 
 #[derive(Debug, PartialEq)]
 pub enum Expression {
-    Reference((Reference, Span)),
+    Invalid,
+    Reference(Reference),
     NumericLiteral((NumericLiteral, Span)),
     ArithmeticOperation {
         left: Box<Expression>,
@@ -145,10 +146,13 @@ pub enum Item {
     String((String, Span)),
 }
 
+type NodePathPortion = (String, Span);
+type NodeAddress = String;
+
 #[derive(Debug, PartialEq)]
 pub enum Reference {
-    Label(String),
-    NodePath(Vec<String>),
+    Label(String, Span),
+    NodePath(Vec<NodePathPortion>, Option<(NodeAddress, Span)>),
 }
 
 pub struct Lexer<'a, I> {
@@ -183,7 +187,9 @@ impl<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem
     }
 }
 
-fn skip_while<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
+pub(self) fn skip_while<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
     source: &mut I,
     skipper: impl Fn(&TokenizerStreamItem) -> bool,
 ) -> usize {
@@ -199,7 +205,9 @@ fn skip_while<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerS
     skipped
 }
 
-fn skip_opt<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
+pub(self) fn skip_opt<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
     source: &mut I,
     skipper: impl Fn(&TokenizerStreamItem) -> bool,
 ) -> usize {
@@ -265,42 +273,30 @@ macro_rules! auto_parser {
 }
 
 auto_parser!(skip_tokens skip_block_comments, |v| {
-    match v {
-        &Token::Comment(Comment { of_type: CommentType::Block, .. }) => true,
-        _ => false,
-    }
+    matches!(v, &Token::Comment(Comment { of_type: CommentType::Block, .. }))
 });
 
 auto_parser!(skip_tokens skip_inline_whitespace, |v| {
-    match v {
-        &Token::Whitespace(
-            WhitespaceToken { of_type: WhitespaceTokenType::Tab | WhitespaceTokenType::Space, .. }
-        ) => true,
-        _ => false,
-    }
+    matches!(v, &Token::Whitespace(
+        WhitespaceToken { of_type: WhitespaceTokenType::Tab | WhitespaceTokenType::Space, .. }
+    ))
 });
 
 auto_parser!(skip_tokens skip_whitespace, |v| {
-    match v {
-        &Token::Whitespace(_) => true,
-        _ => false,
-    }
+    matches!(v, &Token::Whitespace(_))
 });
 
-auto_parser!(skip_tokens skip_possible_inline, |v| {
-    match v {
-        &Token::Whitespace(WhitespaceToken { of_type: WhitespaceTokenType::Newline, .. }) => false,
-        &Token::Comment(Comment { of_type: CommentType::Line, .. }) => false,
-        &(Token::Whitespace(_) | Token::Comment(_)) => true,
+auto_parser!(skip_tokens skip_possible_inline, |v: &Token| {
+    match *v {
+        Token::Whitespace(WhitespaceToken { of_type: WhitespaceTokenType::Newline, .. }) => false,
+        Token::Comment(Comment { of_type: CommentType::Line, .. }) => false,
+        Token::Whitespace(_) | Token::Comment(_) => true,
         _ => false,
     }
 });
 
 auto_parser!(skip_tokens skip_possible, |v| {
-    match v {
-        &(Token::Whitespace(_) | Token::Comment(_)) => true,
-        _ => false,
-    }
+    matches!(v, &(Token::Whitespace(_) | Token::Comment(_)))
 });
 
 enum ExtendedIdent {
@@ -406,7 +402,7 @@ fn consume_any_ident<
                 break;
             }
         };
-        if let None = ptr {
+        if ptr.is_none() {
             ptr = Some(l.span.ptr);
         }
         res.push_str(&String::from(l.token));
@@ -426,6 +422,53 @@ fn consume_any_ident<
         },
         span,
     )
+}
+
+macro_rules! warning {
+    (@msg $message: literal) => {
+        $message.to_string()
+    };
+
+    (@msg $message: expr) => {
+        $message
+    };
+
+    (@err_ty $warning_type: ident) => {
+        Errors::$warning_type
+    };
+
+    (@message ($message: expr, $span: expr, $ptr: expr)) => {
+        Box::new(PrimitiveReportMessage::warning(warning!(@msg $message), $span, $ptr))
+            as Box<dyn ReportInlineMessage>
+    };
+
+    (@message ($message: expr, $span: expr)) => {
+        Box::new(PrimitiveReportMessage::warning(warning!(@msg $message), $span.span, $span.ptr))
+            as Box<dyn ReportInlineMessage>
+    };
+
+    (@messages [$($message: tt),*]) => {
+        vec![$(err!(@message $message)),*]
+    };
+
+    (@segment $warning_type: ident, [$($message: tt),*]) => {
+        Box::new(PrimitiveReportSegment::new(
+            Some(PrimitiveMainMessage::warning(
+                Warnings::$warning_type.message(), Warnings::$warning_type.id(),
+            )),
+            warning!(@messages [$($message),*]),
+        ))
+    };
+
+    (@report $({ $warning_type: ident, [$($message: tt),*$(,)?] }),*$(,)?) => {
+        Box::new(PrimitiveReport::new(
+            vec![$(warning!(@segment $warning_type, [$($message),*])),*]
+        )) as ParseErrorReport
+    };
+
+    ($($t: tt)*) => {
+        warning!(@report $($t)*)
+    };
 }
 
 macro_rules! err {
@@ -492,6 +535,7 @@ macro_rules! err {
 }
 
 pub(self) use err;
+pub(self) use warning;
 
 enum StatementStart {
     Label {
@@ -512,22 +556,26 @@ enum StatementStart {
 macro_rules! def_try_yield {
     ($source: expr) => {
         macro_rules! try_yield {
-                        ($after: expr) => {
-                            match $source.next() {
-                                Some(StreamResult::Ok(v)) => v,
-                                Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
-                                Some(StreamResult::ProcessingError(e)) => {
-                                    (return StreamResult::ProcessingError(e))
-                                }
-                                None => {
-                                    return err!(end [{ UnexpectedEof, [
-                                        ("unexpected end after this", $after)
-                                    ]}]);
-                                }
-                            }
-                        };
-                    }
+            ($after: expr) => {
+                def_try_yield!(@inner_match $source, $after)
+            };
+        }
     };
+
+    (@inner_match $source: expr, $after: expr) => {
+        match $source.next() {
+            Some(StreamResult::Ok(v)) => v,
+            Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
+            Some(StreamResult::ProcessingError(e)) => {
+                (return StreamResult::ProcessingError(StreamedError::ShouldEnd(e)))
+            }
+            None => {
+                return err!(end [{ UnexpectedEof, [
+                    ("unexpected end after this", $after)
+                ]}]);
+            }
+        }
+    }
 }
 
 fn consume_statement_start<
@@ -561,10 +609,7 @@ fn consume_statement_start<
         Token::Colon => {
             let (name, mut reports, abort) = deref_label((start.0, &start.1));
             if skipped > 0 {
-                let mut reports_inner = match reports {
-                    Some(v) => v,
-                    None => Vec::new(),
-                };
+                let mut reports_inner = reports.unwrap_or_default();
                 reports_inner.push(err!(raw [{ UnexpectedWhitespace, [
                     ("a whitespace is unexpected after this label name", start.1.clone()),
                     ("and before this colon", next.span.clone()),
@@ -629,10 +674,14 @@ fn deref_label(name: (ExtendedIdent, &Span)) -> (String, Option<Vec<ParseErrorRe
             v
         }
     };
-    let abort = errors.len() > 0;
+    let abort = !errors.is_empty();
     (
         label_name,
-        if errors.len() > 0 { Some(errors) } else { None },
+        if !errors.is_empty() {
+            Some(errors)
+        } else {
+            None
+        },
         abort,
     )
 }
@@ -644,7 +693,7 @@ fn deref_attribute_name(
 ) -> (String, Option<Vec<ParseErrorReport>>, bool) {
     let mut errors = Vec::new();
     let attr_name = name.0.req_attribute_name();
-    match attr_name.chars().nth(0).unwrap() {
+    match attr_name.chars().next().unwrap() {
         'a'..='z' | 'A'..='Z' | '#' => {}
         _ => errors.push(PrimitiveReport::single(PrimitiveReportSegment::single(
             PrimitiveMainMessage::warning(
@@ -674,7 +723,7 @@ fn deref_node_name(name: (ExtendedIdent, &Span)) -> (String, Option<Vec<ParseErr
             v
         }
     };
-    match node_name.chars().nth(0).unwrap() {
+    match node_name.chars().next().unwrap() {
         'a'..='z' | 'A'..='Z' => {}
         _ => errors.push(err!(raw [{ InvalidNodeName, [
             ("node names must start with a letter", 1, name.1.ptr.clone()),
@@ -682,7 +731,11 @@ fn deref_node_name(name: (ExtendedIdent, &Span)) -> (String, Option<Vec<ParseErr
     }
     (
         node_name,
-        if errors.len() > 0 { Some(errors) } else { None },
+        if !errors.is_empty() {
+            Some(errors)
+        } else {
+            None
+        },
     )
 }
 

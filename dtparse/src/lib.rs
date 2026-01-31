@@ -33,17 +33,25 @@ impl MaybeOwnedString<'_> {
             Self::Owned(v) => v.len(),
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Referenced(v) => v.is_empty(),
+            Self::Owned(v) => v.is_empty(),
+        }
+    }
 }
 
 impl AsRef<str> for MaybeOwnedString<'_> {
     fn as_ref(&self) -> &str {
         match self {
             Self::Referenced(v) => v,
-            Self::Owned(v) => &v,
+            Self::Owned(v) => v,
         }
     }
 }
 
+mod errors;
 mod file;
 mod helpers;
 mod lexer;

@@ -89,15 +89,15 @@ impl<I: Iterator<Item = Result<u8, IoError>>> StringDecoder<'_, I> {
         &mut self,
     ) -> Result<Result<[u8; COUNT], usize>, IoError> {
         let mut res = [0; COUNT];
-        for i in 0..COUNT {
+        for (idx, item) in res.iter_mut().enumerate() {
             let ch = match self.source.next() {
                 Some(Ok(v)) => v,
                 Some(Err(e)) => return Err(e),
-                None => return Ok(Err(i + 1)),
+                None => return Ok(Err(idx + 1)),
             };
-            res[i] = match ch {
+            *item = match ch {
                 0x80..=0xbf => ch & 0x3f,
-                _ => return Ok(Err(i + 1)),
+                _ => return Ok(Err(idx + 1)),
             };
         }
         Ok(Ok(res))
