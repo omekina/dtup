@@ -25,6 +25,7 @@ pub trait PointerStream {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(test, derive(Default))]
 pub struct Pos {
     file: Rc<PathBuf>,
     line: usize,

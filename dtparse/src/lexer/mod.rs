@@ -64,13 +64,13 @@ pub enum ArrayItem<T> {
     Item(T),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum NumericLiteral {
     Decimal(String),
     Hexadecimal(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ArithmeticOperation {
     Addition,
     Subtraction,
@@ -79,7 +79,7 @@ pub enum ArithmeticOperation {
     Modulo,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum RelationalOperation {
     Equal,
     NotEqual,
@@ -89,13 +89,13 @@ pub enum RelationalOperation {
     LessOrEqual,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum LogicalOperation {
     And,
     Or,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum BitwiseOperation {
     And,
     Or,
@@ -104,7 +104,7 @@ pub enum BitwiseOperation {
     RightShift,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Expression {
     Reference((Reference, Span)),
     NumericLiteral((NumericLiteral, Span)),
@@ -145,7 +145,7 @@ pub enum Item {
     String((String, Span)),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Reference {
     Label(String),
     NodePath(Vec<String>),

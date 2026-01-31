@@ -7,7 +7,8 @@ use crate::{
     stream_utils::{PrependablePointer, StreamPrepend},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(test, derive(Default))]
 pub struct Span {
     pub ptr: Pos,
     pub span: usize,
