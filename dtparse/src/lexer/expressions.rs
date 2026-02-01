@@ -444,7 +444,7 @@ impl TernaryParsingStaging {
         expr: &Expression,
     ) -> Option<ParseErrorReport> {
         match expr {
-            Expression::NumericLiteral(_) => None,
+            Expression::NumericLiteral(_) | Expression::Invalid => None,
             _ => Some(warning!({ UnenclosedNestedExpression, [
                 (msg.to_string(), operator_span.clone()),
             ]})),
@@ -646,8 +646,8 @@ impl GroupParsingStack {
             match self.stack.last() {
                 Some(GroupParsingStackItem::Paren { left, .. }) => {
                     return Err(err!(raw [{ InvalidTernaryOperator, [
+                        ("there is no unclosed ternary operator since this", left.clone()),
                         ("what ternary operator are you refering to?", span),
-                        ("there is no `?` since this", left.clone()),
                     ] }]));
                 }
                 Some(GroupParsingStackItem::Ternary { .. }) => {}
