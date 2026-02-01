@@ -48,6 +48,15 @@ pub enum StreamedError<E> {
     ShouldEnd(E),
 }
 
+impl<A> StreamedError<A> {
+    pub fn map<B>(self, mapper: impl FnOnce(A) -> B) -> StreamedError<B> {
+        match self {
+            Self::CanContinue(e) => StreamedError::CanContinue(mapper(e)),
+            Self::ShouldEnd(e) => StreamedError::ShouldEnd(mapper(e)),
+        }
+    }
+}
+
 pub type ParseErrorReport = Box<dyn Report>;
 pub type StreamedErrorReport = StreamedError<Box<dyn crate::report::Report>>;
 
@@ -64,6 +73,14 @@ impl<A, E> StreamResult<A, E> {
             Self::Ok(v) => StreamResult::Ok(mapper(v)),
             Self::IoError(e) => StreamResult::IoError(e),
             Self::ProcessingError(e) => StreamResult::ProcessingError(e),
+        }
+    }
+
+    pub fn map_err<B>(self, mapper: impl FnOnce(E) -> B) -> StreamResult<A, B> {
+        match self {
+            Self::Ok(v) => StreamResult::Ok(v),
+            Self::IoError(e) => StreamResult::IoError(e),
+            Self::ProcessingError(e) => StreamResult::ProcessingError(mapper(e)),
         }
     }
 }

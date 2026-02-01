@@ -21,6 +21,6 @@ report!(Errors(E) {
 });
 
 report!(Warnings(W) {
-    WeirdPropertyName[001] => "werid property name",
+    WeirdPropertyName[001] => "weird property name",
     UnenclosedNestedExpression[002] => "unenclosed nested expression",
 });

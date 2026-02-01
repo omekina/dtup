@@ -35,10 +35,12 @@ pub fn parse(filepath: &Path) -> StreamResult<Vec<LexerToken>, Vec<ParseErrorRep
             }
             StreamResult::IoError(e) => return StreamResult::IoError(e),
             StreamResult::ProcessingError(StreamedError::ShouldEnd(e)) => {
-                reports.push(e);
+                reports.extend(e.into_iter());
                 break;
             }
-            StreamResult::ProcessingError(StreamedError::CanContinue(e)) => reports.push(e),
+            StreamResult::ProcessingError(StreamedError::CanContinue(e)) => {
+                reports.extend(e.into_iter())
+            }
         }
     }
     match reports.len() {

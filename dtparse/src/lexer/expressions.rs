@@ -1,8 +1,8 @@
 use crate::{
     lexer::{
-        ArithmeticOperation, BitwiseOperation, Expression, LogicalOperation, MultiErrorItem,
+        ArithmeticOperation, BitwiseOperation, Expression, Item, LogicalOperation, MultiErrorItem,
         NumericLiteral, Reference, RelationalOperation, StreamItem, TokenizerStreamItem,
-        consume_any_ident, deref_node_name, err, skip_possible, warning,
+        consume_any_ident, def_try_yield, deref_node_name, err, skip_possible, warning,
     },
     report::{
         PrimitiveMainMessage, PrimitiveReport, PrimitiveReportMessage, PrimitiveReportSegment,
@@ -219,7 +219,10 @@ mod binary_operation_parsing {
 
     macro_rules! token {
         (num_lit $num: literal) => {
-            Expression::NumericLiteral((NumericLiteral::Decimal($num.to_string()), Span::default()))
+            Expression::NumericLiteral((
+                NumericLiteral::Hexadecimal($num.to_string()),
+                Span::default(),
+            ))
         };
     }
 
@@ -441,7 +444,7 @@ impl TernaryParsingStaging {
         expr: &Expression,
     ) -> Option<ParseErrorReport> {
         match expr {
-            Expression::NumericLiteral(_) | Expression::Reference(_) => None,
+            Expression::NumericLiteral(_) => None,
             _ => Some(warning!({ UnenclosedNestedExpression, [
                 (msg.to_string(), operator_span.clone()),
             ]})),
@@ -778,52 +781,12 @@ mod test {
     }
 }
 
-macro_rules! def_try_yield {
-    (single_err $source: expr) => { def_try_yield!(@def $source, single) };
-    (multi_err $source: expr) => { def_try_yield!(@def $source, multi) };
-
-    (@def $source: expr, $mode: ident) => {
-        macro_rules! try_yield {
-            ($after: expr) => {
-                def_try_yield!(@inner_match $source, $after, $mode)
-            };
-        }
-    };
-
-    (@inner_should_end single $e: expr) => { $e };
-    (@inner_should_end multi $e: expr) => { vec![$e] };
-
-    (@inner_err_end multi $after: expr) => {
-        return err!(end_multi [{ UnexpectedEof, [
-            ("unexpected end after this", $after)
-        ]}])
-    };
-    (@inner_err_end single $after: expr) => {
-        return err!(end [{ UnexpectedEof, [
-            ("unexpected end after this", $after.clone())
-        ]}])
-    };
-
-    (@inner_match $source: expr, $after: expr, $mode: ident) => {
-        match $source.next() {
-            Some(StreamResult::Ok(v)) => v,
-            Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
-            Some(StreamResult::ProcessingError(e)) => {
-                (return StreamResult::ProcessingError(StreamedError::ShouldEnd(
-                    def_try_yield!(@inner_should_end $mode e)
-                )))
-            }
-            None => def_try_yield!(@inner_err_end $mode $after),
-        }
-    }
-}
-
 fn consume_label_reference<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
     ampersand: Span,
-) -> MultiErrorItem<Expression> {
+) -> MultiErrorItem<Item> {
     def_try_yield!(multi_err source);
     let next = try_yield!(ampersand);
     match next.token {
@@ -832,7 +795,7 @@ fn consume_label_reference<
             content,
             of_type: GenericLiteralType::Ident,
         })) => {
-            return StreamResult::Ok(Expression::Reference(Reference::Label(content, next.span)));
+            return StreamResult::Ok(Item::Reference(Reference::Label(content, next.span)));
         }
         Token::Literal(LiteralToken::Ident(_)) => {
             return err!(cont_multi [{ InvalidReference, [
@@ -902,7 +865,7 @@ fn consume_node_reference<
 >(
     source: &mut I,
     opening: Span,
-) -> MultiErrorItem<Expression> {
+) -> MultiErrorItem<Item> {
     def_try_yield!(multi_err source);
     let mut res_errors = Vec::new();
     let mut address = None;
@@ -990,10 +953,10 @@ fn consume_node_reference<
             }
         }
     }
-    StreamResult::Ok(Expression::Reference(Reference::NodePath(res, address)))
+    StreamResult::Ok(Item::Reference(Reference::NodePath(res, address)))
 }
 
-fn consume_expression<
+pub fn consume_expression<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
@@ -1047,15 +1010,19 @@ fn consume_expression<
         let token = try_yield!(start);
         match token.token {
             Token::Literal(LiteralToken::Ident(GenericLiteral {
-                content,
+                mut content,
                 of_type: GenericLiteralType::HexadecimalNumeric { prefix },
             })) => {
                 req_prev_expr!(none token.span);
                 if !prefix {
                     res_errors.push(err!(raw [{ InvalidNumericLiteral, [
-                        ("hexadecimal literals in `<`, `>` enclosed integers must contain a prefix \
-                         (`0x`)", 1, token.span.ptr.clone()),
+                        (
+                            "hexadecimals in integer arrays (`<`, `>`) must contain prefix `0x`",
+                            1, token.span.ptr.clone()
+                        ),
                     ]}]));
+                } else {
+                    content = content.strip_prefix("0x").unwrap().to_string();
                 }
                 prev_expr = Some(unary!(Expression::NumericLiteral((
                     NumericLiteral::Hexadecimal(content),
@@ -1104,8 +1071,29 @@ fn consume_expression<
                 }
             }
 
-            Token::BitwiseOperator(BitwiseOperator::Not) => todo!(),
-            Token::LogicalOperator(LogicalOperator::Not) => todo!(),
+            Token::BitwiseOperator(BitwiseOperator::Not) => {
+                unary_operations.push(UnaryOperation::BitwiseNot);
+            }
+            Token::LogicalOperator(LogicalOperator::Not) => {
+                unary_operations.push(UnaryOperation::LogicalNot);
+            }
+
+            Token::Ampersand => {
+                let prev = req_prev_expr!(token.span);
+                stack.push(
+                    prev,
+                    BinaryOperation::Bitwise(BitwiseOperation::And),
+                    token.span,
+                );
+            }
+            Token::Slash => {
+                let prev = req_prev_expr!(token.span);
+                stack.push(
+                    prev,
+                    BinaryOperation::Arithmetic(ArithmeticOperation::Division),
+                    token.span,
+                );
+            }
             Token::ArithmeticOperator(op) => {
                 let prev = req_prev_expr!(token.span);
                 stack.push(prev, op.into(), token.span);
