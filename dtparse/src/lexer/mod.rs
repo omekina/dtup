@@ -109,6 +109,7 @@ pub enum BitwiseOperation {
 pub enum Expression {
     Invalid,
     NumericLiteral((NumericLiteral, Span)),
+    Group(Box<Expression>),
     ArithmeticOperation {
         left: Box<Expression>,
         right: Box<Expression>,
@@ -931,7 +932,9 @@ fn consume_attribute_value<
     source: &mut I,
     eq: &Span,
 ) -> MultiErrorItem<(Vec<Item>, WarningReports, ErrorReports)> {
-    def_try_yield!(custom_multi_err source, "this value assignment does not end until eof");
+    def_try_yield!(custom_multi_err source,
+        "this value assignment does not end until eof, perhaps you forgot a semicolon?"
+    );
     auto_parser!(skip_tokens skip_to_expr_delim, |v| {
         !matches!(v, &(Token::Comma | Token::Semicolon))
     });
@@ -997,6 +1000,7 @@ fn consume_attribute_value<
             (Token::Literal(LiteralToken::String(_)), false) => {
                 skip_to_expr_delim(source);
                 errors.push(err!(raw [{ UnexpectedToken, [
+                    ("assignment started here", eq.clone()),
                     ("did not expect this, perhaps you forgot a semicolon before this?", 1, token.span.ptr),
                 ]}]));
             }
@@ -1010,7 +1014,9 @@ fn consume_attribute_value<
                 break;
             }
             (_, false) => {
+                skip_to_expr_delim(source);
                 errors.push(err!(raw [{ UnexpectedToken, [
+                    ("assignment started here", eq.clone()),
                     ("did not expect this, perhaps you forgot a semicolon before this?", token.span),
                 ]}]));
             }

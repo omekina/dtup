@@ -8,7 +8,7 @@ use crate::{
 };
 use std::{fs::File, io::Read, path::Path};
 
-pub fn parse(filepath: &Path) -> StreamResult<Vec<LexerToken>, Vec<ParseErrorReport>> {
+pub fn parse(filepath: &Path) -> StreamResult<(Vec<LexerToken>, Vec<ParseErrorReport>), ()> {
     let file = match File::open(filepath) {
         Ok(v) => v,
         Err(e) => return StreamResult::IoError(e.into()),
@@ -43,8 +43,5 @@ pub fn parse(filepath: &Path) -> StreamResult<Vec<LexerToken>, Vec<ParseErrorRep
             }
         }
     }
-    match reports.len() {
-        0 => StreamResult::Ok(lexed),
-        _ => StreamResult::ProcessingError(reports),
-    }
+    StreamResult::Ok((lexed, reports))
 }

@@ -444,7 +444,7 @@ impl TernaryParsingStaging {
         expr: &Expression,
     ) -> Option<ParseErrorReport> {
         match expr {
-            Expression::NumericLiteral(_) | Expression::Invalid => None,
+            Expression::Group(_) | Expression::NumericLiteral(_) | Expression::Invalid => None,
             _ => Some(warning!({ UnenclosedNestedExpression, [
                 (msg.to_string(), operator_span.clone()),
             ]})),
@@ -606,7 +606,10 @@ impl GroupParsingStack {
                     unary_operations,
                     left: _,
                 } => {
-                    let content = nest_unary(content.merge(tmp), unary_operations);
+                    let content = nest_unary(
+                        Expression::Group(Box::new(content.merge(tmp))),
+                        unary_operations,
+                    );
                     if self.stack.is_empty() {
                         return (GroupParsingStackPopResult::Ended(content), warnings, errors);
                     } else {
