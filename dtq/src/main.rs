@@ -18,16 +18,15 @@ fn main() {
     let args = Args::parse();
 
     let mut stdout = BufWriter::new(stdout());
-    let tokens = match parse(&args.input_file) {
+    let (tokens, reports) = match parse(&args.input_file) {
         StreamResult::Ok(v) => v,
         StreamResult::IoError(e) => panic!("io error: {e:?}"),
-        StreamResult::ProcessingError(reports) => {
-            for report in reports {
-                write_report(report, &mut stdout);
-                stdout.write_all(b"\n").unwrap();
-            }
-            panic!("could not continue");
-        }
+        StreamResult::ProcessingError(()) => panic!(),
     };
+    for report in reports {
+        write_report(report, &mut stdout);
+        stdout.write_all(b"\n").unwrap();
+    }
+    stdout.flush().unwrap();
     println!("{:?}", tokens);
 }
