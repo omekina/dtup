@@ -1,8 +1,8 @@
 use crate::{
     lexer::{
-        ArithmeticOperation, BitwiseOperation, Expression, Item, LogicalOperation, MultiErrorItem,
-        NumericLiteral, Reference, RelationalOperation, StreamItem, TokenizerStreamItem,
-        consume_any_ident, def_try_yield, deref_node_name, err, skip_possible, warning,
+        ArithmeticOperation, BitwiseOperation, Expression, LogicalOperation, MultiErrorItem,
+        NumericLiteral, Reference, RelationalOperation, TokenizerStreamItem, consume_any_ident,
+        def_try_yield, deref_node_name, err, opt_consume_any_ident, skip_possible, warning,
     },
     report::{
         PrimitiveMainMessage, PrimitiveReport, PrimitiveReportMessage, PrimitiveReportSegment,
@@ -606,13 +606,14 @@ impl GroupParsingStack {
                     unary_operations,
                     left: _,
                 } => {
-                    let content = nest_unary(
-                        Expression::Group(Box::new(content.merge(tmp))),
-                        unary_operations,
-                    );
                     if self.stack.is_empty() {
+                        let content = nest_unary(content.merge(tmp), unary_operations);
                         return (GroupParsingStackPopResult::Ended(content), warnings, errors);
                     } else {
+                        let content = nest_unary(
+                            Expression::Group(Box::new(content.merge(tmp))),
+                            unary_operations,
+                        );
                         return (
                             GroupParsingStackPopResult::Continue(content),
                             warnings,
@@ -712,7 +713,7 @@ mod test {
                 else_expr: Box::new(Expression::Invalid)
             })
         );
-        assert_eq!(warnings.len(), 3);
+        assert_eq!(warnings.len(), 0);
         assert!(errors.is_empty());
     }
 
@@ -731,7 +732,7 @@ mod test {
         let warnings = stack
             .ternary_else(Default::default(), Expression::Invalid)
             .unwrap();
-        assert_eq!(warnings.len(), 3);
+        assert_eq!(warnings.len(), 0);
         let (res, warnings, errors) = stack.end_paren(Default::default(), Expression::Invalid);
         assert_eq!(
             res,
@@ -745,7 +746,7 @@ mod test {
                 else_expr: Box::new(Expression::Invalid),
             })
         );
-        assert_eq!(warnings.len(), 3);
+        assert_eq!(warnings.len(), 1);
         assert!(errors.is_empty());
     }
 
@@ -779,17 +780,17 @@ mod test {
                 }),
             })
         );
-        assert_eq!(warnings.len(), 6);
+        assert_eq!(warnings.len(), 1);
         assert!(errors.is_empty());
     }
 }
 
-fn consume_label_reference<
+pub fn consume_label_reference<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
     ampersand: Span,
-) -> MultiErrorItem<Item> {
+) -> MultiErrorItem<Reference> {
     def_try_yield!(multi_err source);
     let next = try_yield!(ampersand);
     match next.token {
@@ -798,7 +799,7 @@ fn consume_label_reference<
             content,
             of_type: GenericLiteralType::Ident,
         })) => {
-            return StreamResult::Ok(Item::Reference(Reference::Label(content, next.span)));
+            return StreamResult::Ok(Reference::Label(content, next.span));
         }
         Token::Literal(LiteralToken::Ident(_)) => {
             return err!(cont_multi [{ InvalidReference, [
@@ -815,52 +816,24 @@ fn consume_label_reference<
     }
 }
 
-fn consume_node_ident<
-    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
->(
-    source: &mut I,
-) -> (String, Vec<ParseErrorReport>) {
-    let (ident, span) = consume_any_ident(source);
-    let (res, errors) = deref_node_name((ident, &span));
-    (res, errors.unwrap_or_default())
-}
-
 fn require_node_address<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
     at: &Span,
-) -> StreamItem<(String, Span)> {
+) -> MultiErrorItem<(String, Span)> {
     def_try_yield!(single_err source);
-    let token = try_yield!(at);
-    let literal = match token.token {
-        Token::Literal(v) => v,
-        _ => {
-            return err!(cont [{ InvalidNodePath, [
-                ("expected a valid hexadecimal literal after this", at.clone()),
-            ]}]);
-        }
+    let Some(((ident, errors), span)) = opt_consume_any_ident(source)
+        .map(|(ident, span)| (deref_node_name((ident, &span), false), span))
+    else {
+        return err!(cont_multi [{ UnexpectedToken, [
+            ("expected a valid node address after this", at.clone()),
+        ]}]);
     };
-    let literal = match literal {
-        LiteralToken::Ident(GenericLiteral {
-            of_type: GenericLiteralType::HexadecimalNumeric { prefix: false },
-            content,
-        }) => content,
-        LiteralToken::Ident(GenericLiteral {
-            of_type: GenericLiteralType::HexadecimalNumeric { prefix: true },
-            ..
-        }) => {
-            return err!(cont [{ InvalidNodePath, [
-                ("node addresses must not have a prefix", 2, token.span.ptr),
-            ]}]);
-        }
-        _ => {
-            return err!(cont [{ InvalidNodePath, [
-                ("expected a valid hexadecimal literal after this", at.clone()),
-            ]}]);
-        }
-    };
-    StreamResult::Ok((literal, token.span))
+    if let Some(reports) = errors {
+        return StreamResult::ProcessingError(StreamedError::CanContinue(reports));
+    }
+    StreamResult::Ok((ident, span))
 }
 
 fn consume_node_reference<
@@ -868,7 +841,7 @@ fn consume_node_reference<
 >(
     source: &mut I,
     opening: Span,
-) -> MultiErrorItem<Item> {
+) -> MultiErrorItem<Reference> {
     def_try_yield!(multi_err source);
     let mut res_errors = Vec::new();
     let mut address = None;
@@ -915,7 +888,7 @@ fn consume_node_reference<
                 }
                 source.push(StreamResult::Ok(token));
                 let (ident, span) = consume_any_ident(source);
-                let (ident, errors) = deref_node_name((ident, &span));
+                let (ident, errors) = deref_node_name((ident, &span), true);
                 if let Some(errors) = errors {
                     res_errors.extend(errors.into_iter());
                 }
@@ -927,10 +900,10 @@ fn consume_node_reference<
                     StreamResult::Ok(v) => Some(v),
                     StreamResult::IoError(e) => return StreamResult::IoError(e),
                     StreamResult::ProcessingError(StreamedError::ShouldEnd(e)) => {
-                        return StreamResult::ProcessingError(StreamedError::ShouldEnd(vec![e]));
+                        return StreamResult::ProcessingError(StreamedError::ShouldEnd(e));
                     }
                     StreamResult::ProcessingError(StreamedError::CanContinue(e)) => {
-                        res_errors.push(e);
+                        res_errors.extend(e);
                         None
                     }
                 };
@@ -956,7 +929,7 @@ fn consume_node_reference<
             }
         }
     }
-    StreamResult::Ok(Item::Reference(Reference::NodePath(res, address)))
+    StreamResult::Ok(Reference::NodePath(res, address))
 }
 
 pub fn consume_expression<
@@ -1021,7 +994,7 @@ pub fn consume_expression<
                     res_errors.push(err!(raw [{ InvalidNumericLiteral, [
                         (
                             "hexadecimals in integer arrays (`<`, `>`) must contain prefix `0x`",
-                            1, token.span.ptr.clone()
+                            token.span.clone()
                         ),
                     ]}]));
                 } else {

@@ -1,5 +1,10 @@
 use crate::{
-    lexer::expressions::consume_expression,
+    lexer::{
+        compiler_directives::{
+            CompilerDirective, consume_compiler_directive, consume_compiler_directive_or_root_node,
+        },
+        expressions::{consume_expression, consume_label_reference},
+    },
     report::{
         PrimitiveMainMessage, PrimitiveReport, PrimitiveReportMessage, PrimitiveReportSegment,
         Report, ReportInlineMessage,
@@ -12,6 +17,7 @@ use crate::{
     },
 };
 
+mod compiler_directives;
 mod expressions;
 
 type StreamItem<T> = StreamResult<T, StreamedError<ParseErrorReport>>;
@@ -20,11 +26,9 @@ type MultiErrorItem<T> = StreamResult<T, StreamedError<Vec<ParseErrorReport>>>;
 
 #[derive(Debug)]
 pub enum LexerToken {
+    Invalid,
     Newline,
-    CompilerDirective {
-        directive: String,
-        span: Span,
-    },
+    CompilerDirective(CompilerDirective),
     Label {
         name: (String, Span),
         colon: Span,
@@ -137,10 +141,12 @@ pub enum Expression {
         then_expr: Box<Expression>,
         else_expr: Box<Expression>,
     },
+    Reference(Reference),
 }
 
 #[derive(Debug)]
 pub enum Item {
+    ComplierDirective(CompilerDirective),
     Reference(Reference),
     NumericLiteral(Vec<Expression>),
     ByteString(Vec<(String, Span)>),
@@ -179,30 +185,83 @@ impl<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem
     type Item = MultiErrorItem<LexerItem>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        macro_rules! try_yield {
+            (option) => {
+                match self.source.next() {
+                    Some(StreamResult::Ok(v)) => Some(v),
+                    Some(StreamResult::IoError(e)) => return Some(StreamResult::IoError(e)),
+                    Some(StreamResult::ProcessingError(e)) => {
+                        return Some(StreamResult::ProcessingError(StreamedError::ShouldEnd(
+                            vec![e],
+                        )));
+                    }
+                    None => None,
+                }
+            };
+
+            () => {
+                try_yield!(option)?
+            };
+        }
         skip_possible(self.source);
-        let token = match self.source.next()? {
-            StreamResult::Ok(v) => v,
-            StreamResult::IoError(e) => return Some(StreamResult::IoError(e)),
-            StreamResult::ProcessingError(e) => {
-                return Some(StreamResult::ProcessingError(StreamedError::ShouldEnd(
-                    vec![e],
-                )));
-            }
-        };
+        let token = try_yield!();
         match token.token {
             Token::Literal(LiteralToken::Ident(_)) => {
                 self.source.push(StreamResult::Ok(token));
                 Some(consume_statement(self.source))
             }
-            Token::GroupClosing(GroupType::Brace) => Some(StreamResult::Ok(LexerItem {
-                token: LexerToken::NodeEnd {
-                    closing_delimiter: token.span,
-                },
-                reports: None,
-                prevent_compilation: false,
-            })),
+            Token::GroupClosing(GroupType::Brace) => {
+                skip_possible(self.source);
+                let reports = match try_yield!(option) {
+                    Some(SpanToken {
+                        token: Token::Semicolon,
+                        ..
+                    }) => None,
+                    Some(SpanToken { span, token: t }) => {
+                        let res = vec![err!(raw [{ UnexpectedToken, [
+                            ("group closing must have a trailing semicolon", token.span.clone()),
+                            ("expected a semicolon here", span.clone())
+                        ]}])];
+                        self.source
+                            .push(StreamResult::Ok(SpanToken { span, token: t }));
+                        Some(res)
+                    }
+                    None => Some(vec![err!(raw [{ UnexpectedToken, [
+                        ("expected a semicolon after this", token.span.clone()),
+                    ]}])]),
+                };
+                Some(StreamResult::Ok(LexerItem {
+                    token: LexerToken::NodeEnd {
+                        closing_delimiter: token.span,
+                    },
+                    prevent_compilation: reports.is_some(),
+                    reports,
+                }))
+            }
+            Token::Slash => Some(
+                consume_compiler_directive_or_root_node(self.source, token.span)
+                    .map_err(|e| e.map(|e| vec![e]))
+                    .map(|(token, errors)| match token {
+                        Some(v) => LexerItem {
+                            token: v,
+                            prevent_compilation: !errors.is_empty(),
+                            reports: Some(errors),
+                        },
+                        None => LexerItem {
+                            token: LexerToken::Invalid,
+                            reports: Some(errors),
+                            prevent_compilation: true,
+                        },
+                    }),
+            ),
             Token::Whitespace(_) | Token::Comment(_) => unreachable!(),
-            _ => todo!(),
+            _ => Some(StreamResult::Ok(LexerItem {
+                token: LexerToken::Invalid,
+                reports: Some(vec![err!(raw [{ UnexpectedToken, [
+                    ("unexpected token", token.span),
+                ]}])]),
+                prevent_compilation: true,
+            })),
         }
     }
 }
@@ -304,6 +363,8 @@ macro_rules! auto_parser {
     };
 }
 
+pub(self) use auto_parser;
+
 auto_parser!(skip_tokens skip_block_comments, |v| {
     matches!(v, &Token::Comment(Comment { of_type: CommentType::Block, .. }))
 });
@@ -381,11 +442,11 @@ impl ExtendedIdent {
     }
 }
 
-fn consume_any_ident<
+fn opt_consume_any_ident<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
-) -> (ExtendedIdent, Span) {
+) -> Option<(ExtendedIdent, Span)> {
     let mut res = String::new();
     #[derive(Clone, Copy)]
     enum ExtendedIdentType {
@@ -443,17 +504,25 @@ fn consume_any_ident<
     }
 
     let Some(ptr) = ptr else {
-        panic!("invalid call to consume_any_ident");
+        return None;
     };
     let span = Span { ptr, span };
-    (
+    Some((
         match of_type {
             ExtendedIdentType::Label => ExtendedIdent::Label(res),
             ExtendedIdentType::Node => ExtendedIdent::Node(res),
             ExtendedIdentType::Attribute => ExtendedIdent::Attribute(res),
         },
         span,
-    )
+    ))
+}
+
+fn consume_any_ident<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
+    source: &mut I,
+) -> (ExtendedIdent, Span) {
+    opt_consume_any_ident(source).unwrap()
 }
 
 macro_rules! warning {
@@ -597,6 +666,10 @@ macro_rules! def_try_yield {
         def_try_yield!(@def $source, multi, $message.to_string())
     };
 
+    (errs_only $mode: ident $source: expr) => {
+        def_try_yield!(@def_errs_only $source, $mode)
+    };
+
     (@def $source: expr, $mode: ident, $message: expr) => {
         macro_rules! try_yield {
             ($after: expr) => {
@@ -605,8 +678,16 @@ macro_rules! def_try_yield {
         }
     };
 
-    (@inner_should_end single $e: expr) => { $e };
-    (@inner_should_end multi $e: expr) => { vec![$e] };
+    (@def_errs_only $source: expr, $mode: ident) => {
+        macro_rules! try_yield_errs {
+            () => {
+                def_try_yield!(@inner_match_errs_only $source, $mode)
+            };
+        }
+    };
+
+    (@inner_err single $e: expr) => { $e };
+    (@inner_err multi $e: expr) => { vec![$e] };
 
     (@inner_err_end multi $after: expr, $message: expr) => {
         return err!(end_multi [{ UnexpectedEof, [
@@ -625,12 +706,25 @@ macro_rules! def_try_yield {
             Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
             Some(StreamResult::ProcessingError(e)) => {
                 (return StreamResult::ProcessingError(StreamedError::ShouldEnd(
-                    def_try_yield!(@inner_should_end $mode e)
+                    def_try_yield!(@inner_err $mode e)
                 )))
             }
             None => def_try_yield!(@inner_err_end $mode $after, $message),
         }
-    }
+    };
+
+    (@inner_match_errs_only $source: expr, $mode: ident) => {
+        match $source.next() {
+            Some(StreamResult::Ok(v)) => Some(v),
+            Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
+            Some(StreamResult::ProcessingError(e)) => {
+                return StreamResult::ProcessingError(StreamedError::ShouldEnd(
+                    def_try_yield!(@inner_err $mode e)
+                ))
+            }
+            None => None,
+        }
+    };
 }
 
 pub(self) use def_try_yield;
@@ -685,7 +779,7 @@ fn consume_statement<
             })
         }
         Token::GroupOpening(GroupType::Brace) => {
-            let (name, reports) = deref_node_name((start.0, &start.1));
+            let (name, reports) = deref_node_name((start.0, &start.1), true);
             StreamResult::Ok(LexerItem {
                 token: LexerToken::NodeStart {
                     name: (name, start.1),
@@ -703,7 +797,7 @@ fn consume_statement<
                 StreamResult::IoError(e) => return StreamResult::IoError(e),
                 StreamResult::ProcessingError(e) => return StreamResult::ProcessingError(e),
             };
-            let abort = abort || (!e.is_empty());
+            let abort = abort || (e.is_empty());
             let mut reports = reports.unwrap_or_default();
             reports.extend(w.into_iter());
             reports.extend(e.into_iter());
@@ -803,7 +897,10 @@ fn deref_attribute_name(
     )
 }
 
-fn deref_node_name(name: (ExtendedIdent, &Span)) -> (String, Option<Vec<ParseErrorReport>>) {
+fn deref_node_name(
+    name: (ExtendedIdent, &Span),
+    require_letter_start: bool,
+) -> (String, Option<Vec<ParseErrorReport>>) {
     let mut errors = Vec::new();
     let node_name = match name.0.req_node_name() {
         Ok(v) => v,
@@ -816,11 +913,13 @@ fn deref_node_name(name: (ExtendedIdent, &Span)) -> (String, Option<Vec<ParseErr
             v
         }
     };
-    match node_name.chars().next().unwrap() {
-        'a'..='z' | 'A'..='Z' => {}
-        _ => errors.push(err!(raw [{ InvalidNodeName, [
-            ("node names must start with a letter", 1, name.1.ptr.clone()),
-        ]}])),
+    if require_letter_start {
+        match node_name.chars().next().unwrap() {
+            'a'..='z' | 'A'..='Z' => {}
+            _ => errors.push(err!(raw [{ InvalidNodeName, [
+                ("node names must start with a letter", 1, name.1.ptr.clone()),
+            ]}])),
+        }
     }
     (
         node_name,
@@ -839,56 +938,22 @@ fn consume_node_address<
     name: (ExtendedIdent, Span),
     at: SpanToken,
 ) -> StreamItem<LexerItem> {
-    macro_rules! skip_stmt_cont {
-        () => {
-            auto_parser!(skip_token_inline source, |v| {
-                match v {
-                    &(Token::Equal | Token::GroupOpening(GroupType::Brace) | Token::Semicolon) => {
-                        true
-                    },
-                    _ => false,
-                }
-            });
-        };
-    }
     def_try_yield!(single_err source);
+    let mut errors = Vec::new();
     skip_block_comments(source);
-    let address = try_yield!(at.span);
-    let (address, address_span) = match address.token {
-        Token::Literal(LiteralToken::Ident(v)) => (v, address.span),
-        Token::Whitespace(_) | Token::Comment(_) => {
-            let span = address.span.clone();
-            source.push(StreamResult::Ok(address));
-            return err!(cont [{ UnexpectedToken, [
-                ("expected a hexadecimal literal after this", span)
-            ]}]);
+    let ident = opt_consume_any_ident(source)
+        .map(|(ident, span)| (deref_node_name((ident, &span), false), span));
+    let (address, address_span) = match ident {
+        Some(((ident, errors_inner), span)) => {
+            errors.extend(errors_inner.unwrap_or_default());
+            (ident, span)
         }
-        _ => {
-            let span = address.span.clone();
-            source.push(StreamResult::Ok(address));
+        None => {
             return err!(cont [{ UnexpectedToken, [
-                ("expected a hexadecimal literal here", span)
+                ("expected a valid ident after this", at.span),
             ]}]);
         }
     };
-    match address.of_type {
-        GenericLiteralType::HexadecimalNumeric { prefix: false }
-        | GenericLiteralType::DecimalNumeric => {}
-        GenericLiteralType::HexadecimalNumeric { prefix: true } => {
-            skip_stmt_cont!();
-            return err!(cont [{ InvalidNodeAddress, [
-                ("node addresses must not contain a prefix", 2, address_span.ptr)
-            ]}]);
-        }
-        _ => {
-            skip_stmt_cont!();
-            return err!(cont [{ InvalidNodeAddress, [
-                ("because this implies a node with an address", at.span),
-                ("this must be a hexadecimal literal", address_span),
-            ]}]);
-        }
-    }
-    let address = address.content;
     skip_possible(source);
     let opening = try_yield!(address_span);
     match opening.token {
@@ -911,15 +976,17 @@ fn consume_node_address<
         }
     }
     let name_span = name.1.clone();
-    let (node_name, reports) = deref_node_name((name.0, &name.1));
+    let (node_name, reports) = deref_node_name((name.0, &name.1), true);
+    let mut reports = reports.unwrap_or_default();
+    reports.extend(errors);
     StreamResult::Ok(LexerItem {
         token: LexerToken::NodeStart {
             name: (node_name, name_span),
             unit_address: Some((address, address_span)),
             opening_delimiter: opening.span,
         },
-        prevent_compilation: reports.is_some(),
-        reports,
+        prevent_compilation: !reports.is_empty(),
+        reports: Some(reports),
     })
 }
 
@@ -1004,6 +1071,27 @@ fn consume_attribute_value<
                     ("did not expect this, perhaps you forgot a semicolon before this?", 1, token.span.ptr),
                 ]}]));
             }
+            (Token::Slash, true) => {
+                let directive = yield_consumer!(
+                    consume_compiler_directive(source, token.span).map_err(|e| e.map(|e| vec![e]))
+                );
+                match directive {
+                    Some(v) => res.push(Item::ComplierDirective(v)),
+                    None => {}
+                }
+            }
+            (Token::Ampersand, true) => {
+                res.push(match consume_label_reference(source, token.span) {
+                    StreamResult::Ok(v) => Item::Reference(v),
+                    StreamResult::IoError(e) => return StreamResult::IoError(e),
+                    StreamResult::ProcessingError(StreamedError::CanContinue(e)) => {
+                        errors.extend(e);
+                        continue;
+                    }
+                    StreamResult::ProcessingError(e) => return StreamResult::ProcessingError(e),
+                });
+                expecting_item = false;
+            }
             (Token::Semicolon, false) => {
                 break;
             }
@@ -1059,7 +1147,7 @@ fn consume_integer<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<Token
                     errors.push(err!(raw [{ InvalidNumericLiteral, [
                         (
                             "hexadecimals in integer arrays (`<`, `>`) must contain prefix `0x`",
-                            1, token.span.ptr.clone()
+                            token.span.clone()
                         ),
                     ]}]));
                 } else {
@@ -1083,6 +1171,22 @@ fn consume_integer<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<Token
             Token::Literal(LiteralToken::String(_)) => {
                 errors.push(err!(raw [{ UnexpectedToken, [
                     ("expected a valid expression (without quotes)", 1, token.span.ptr),
+                ]}]));
+            }
+            Token::Ampersand => {
+                res.push(match consume_label_reference(source, token.span) {
+                    StreamResult::Ok(v) => Expression::Reference(v),
+                    StreamResult::IoError(e) => return StreamResult::IoError(e),
+                    StreamResult::ProcessingError(StreamedError::CanContinue(e)) => {
+                        errors.extend(e);
+                        continue;
+                    }
+                    StreamResult::ProcessingError(e) => return StreamResult::ProcessingError(e),
+                });
+            }
+            Token::Comma => {
+                errors.push(err!(raw [{ UnexpectedToken, [
+                    ("integer arrays are space-separated", token.span),
                 ]}]));
             }
             Token::Gt => break,

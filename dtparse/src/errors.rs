@@ -18,6 +18,7 @@ report!(Errors(E) {
     InvalidNodePath[015] => "invalid node path",
     InvalidReference[016] => "invalid reference",
     InvalidExpression[017] => "invalid expression",
+    UnknownCompilerDirective[018] => "unknown compiler directive",
 });
 
 report!(Warnings(W) {

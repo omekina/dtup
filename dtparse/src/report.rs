@@ -286,7 +286,7 @@ impl SegmentDisplay<'_> {
         let mut written = 0;
 
         // raw line and line number
-        let raw_line = file_reader.read_line_lossy(line)?;
+        let (raw_line, line_length) = file_reader.read_line_lossy(line)?;
         written += Self::write_line_prefix(Some(*line.line()), max_lineno_length, writer)?
             + writer.write(&raw_line)?
             + writer.write("\n")?
@@ -295,13 +295,23 @@ impl SegmentDisplay<'_> {
         // message underlines
         let mut ptr = 1;
         for message in messages.iter() {
-            let end_ptr = message.ptr().col() + message.span();
+            let mut end_ptr = message.ptr().col() + message.span();
+            let should_break = if end_ptr > line_length + 1 {
+                end_ptr = line_length + 1;
+                true
+            } else {
+                false
+            };
             let span = end_ptr.saturating_sub(std::cmp::max(ptr, *message.ptr().col()));
             written += writer.write_rep(' ', message.ptr().col().saturating_sub(ptr))?
                 + Style::from(message.color()).bold().write(writer)?
                 + writer.write_rep(*message.underline_symbol(), span)?
                 + Style::default().reset().write(writer)?;
             ptr = end_ptr;
+            if should_break {
+                println!("breaking on {line_length}");
+                break;
+            }
         }
         written += writer.write("\n")?;
 

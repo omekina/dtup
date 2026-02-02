@@ -12,7 +12,7 @@ pub trait FileReader {
     fn read_line_lossy<'a>(
         &'a mut self,
         line: &dyn ReportTextPointer,
-    ) -> Result<MaybeOwnedString<'a>, IoError>;
+    ) -> Result<(MaybeOwnedString<'a>, usize), IoError>;
 }
 
 #[derive(Debug)]
@@ -70,11 +70,11 @@ impl BasicFileReader {
         Ok(())
     }
 
-    fn read_line(file: &mut File) -> Result<String, IoError> {
-        Ok(String::from_utf8_lossy(
-            &Self::read_until(file, |b| b != b'\n').map_err(BasicFileReaderError::ReadLine)?,
-        )
-        .to_string())
+    fn read_line(file: &mut File) -> Result<(String, usize), IoError> {
+        let read =
+            Self::read_until(file, |b| b != b'\n').map_err(BasicFileReaderError::ReadLine)?;
+        let str = String::from_utf8_lossy(&read);
+        Ok((str.to_string(), str.chars().count()))
     }
 
     fn read_until(
@@ -107,9 +107,9 @@ impl FileReader for BasicFileReader {
     fn read_line_lossy<'a>(
         &'a mut self,
         line: &dyn ReportTextPointer,
-    ) -> Result<MaybeOwnedString<'a>, IoError> {
+    ) -> Result<(MaybeOwnedString<'a>, usize), IoError> {
         let file = line.file();
-        let mut file = match self.handles.get_mut(file) {
+        let file = match self.handles.get_mut(file) {
             Some(v) => v,
             None => {
                 self.handles.insert(file.to_path_buf(), Self::open(file)?);
@@ -117,7 +117,8 @@ impl FileReader for BasicFileReader {
             }
         };
         Self::seek(file, *line.line_start_byte())?;
-        Ok(MaybeOwnedString::Owned(Self::read_line(file)?))
+        let (read, read_count) = Self::read_line(file)?;
+        Ok((MaybeOwnedString::Owned(read), read_count))
     }
 }
 
