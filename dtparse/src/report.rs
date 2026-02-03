@@ -309,7 +309,6 @@ impl SegmentDisplay<'_> {
                 + Style::default().reset().write(writer)?;
             ptr = end_ptr;
             if should_break {
-                println!("breaking on {line_length}");
                 break;
             }
         }
@@ -319,7 +318,15 @@ impl SegmentDisplay<'_> {
         for i in (0..messages.len()).rev() {
             written += Self::write_line_prefix(None, max_lineno_length, writer)?
                 + Self::write_ptr_lines(&messages[..i + 1], writer)?;
-            if let Some((color, message)) = messages.get(i).map(|v| (v.color(), v.message())) {
+            if let Some((color, message, col)) = messages
+                .get(i)
+                .map(|v| (v.color(), v.message(), v.ptr().col()))
+            {
+                if *col == 0 {
+                    written += writer.write("\\n ")?
+                        + Style::from(color).bold().write(writer)?
+                        + writer.write("< ")?;
+                }
                 written += Style::from(color).bold().write(writer)?
                     + writer.write(message)?
                     + Style::default().reset().write(writer)?;

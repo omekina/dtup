@@ -20,9 +20,9 @@ pub fn parse(filepath: &Path) -> StreamResult<(Vec<LexerToken>, Vec<ParseErrorRe
     let mut prependable_stream: PrependableStream<StreamResult<char, ParseErrorReport>, _, 1> =
         PrependableStream::new(pointer_tracker);
     let mut tokenizer = Tokenizer::new(&mut prependable_stream);
-    let error_skipper = ErrorSkipper::new(&mut tokenizer);
+    let mut error_skipper = ErrorSkipper::new(&mut tokenizer);
     let mut prependable_stream: PrependableStream<StreamResult<SpanToken, ParseErrorReport>, _, 1> =
-        PrependableStream::new(error_skipper);
+        PrependableStream::new(&mut error_skipper);
     let mut lexed = Vec::new();
     let mut reports = Vec::new();
     for v in Lexer::new(&mut prependable_stream) {
@@ -43,5 +43,6 @@ pub fn parse(filepath: &Path) -> StreamResult<(Vec<LexerToken>, Vec<ParseErrorRe
             }
         }
     }
+    reports.extend(error_skipper.take_errors());
     StreamResult::Ok((lexed, reports))
 }

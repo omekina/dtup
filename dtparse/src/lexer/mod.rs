@@ -4,12 +4,13 @@ use crate::{
             CompilerDirective, consume_compiler_directive, consume_compiler_directive_or_root_node,
         },
         expressions::{consume_expression, consume_label_reference},
+        node::{consume_node_address, deref_ident_to_node_name},
     },
     report::{
         PrimitiveMainMessage, PrimitiveReport, PrimitiveReportMessage, PrimitiveReportSegment,
-        Report, ReportInlineMessage,
+        Report,
     },
-    result::{Errors, ParseErrorReport, StreamResult, StreamedError, Warnings},
+    result::{ParseErrorReport, StreamResult, StreamedError, Warnings},
     stream_utils::StreamPrepend,
     tokenizer::{
         ArithmeticOperator, Comment, CommentType, GenericLiteral, GenericLiteralType, GroupType,
@@ -19,6 +20,7 @@ use crate::{
 
 mod compiler_directives;
 mod expressions;
+mod node;
 
 type StreamItem<T> = StreamResult<T, StreamedError<ParseErrorReport>>;
 type TokenizerStreamItem = StreamResult<SpanToken, ParseErrorReport>;
@@ -172,6 +174,117 @@ impl<'a, I> Lexer<'a, I> {
     }
 }
 
+macro_rules! def_yeet {
+    () => {
+        def_yeet!(@def_yeet [])
+    };
+
+    ([$($t: ident)*]) => {
+        def_yeet!(@def_yeet [$($t)*])
+    };
+
+    (require next from $source: expr => $mode: ident with message default) => {
+        def_yeet!(@def_stream_req_next $source, $mode, def_yeet!(@message default))
+    };
+
+    (require next from $source: expr => $mode: ident with message $message: expr) => {
+        def_yeet!(@def_stream_req_next $source, $mode, def_yeet!(@message $message))
+    };
+
+    (optionally get next from $source: expr => $mode: ident) => {
+        def_yeet!(@def_stream_opt_next passthrough, $source, $mode)
+    };
+
+    (optionally get next from $source: expr => option_wrapped $mode: ident) => {
+        def_yeet!(@def_stream_opt_next option_wrap, $source, $mode)
+    };
+
+    (@message default) => { "unexpected end after this".to_string() };
+    (@message $custom: literal) => { $custom.to_string() };
+    (@message $custom: expr) => { $custom };
+
+    (@def_yeet [$($res_map: tt)*]) => {
+        macro_rules! yeet_value {
+            ($v: expr) => {
+                def_yeet!(@inner_match $v, raw, single, [$($res_map)*])
+            };
+        }
+    };
+
+    (@def_stream_req_next $source: expr, $mode: ident, $message: expr) => {
+        macro_rules! req_next {
+            ($after: expr) => {
+                def_yeet!(@match_option_return $source.next(), $after, $mode, $message)
+            };
+        }
+    };
+
+    (@def_stream_opt_next $option_mode: ident, $source: expr, $mode: ident) => {
+        macro_rules! try_next {
+            () => {
+                def_yeet!(@match_option_optional $source.next(), $mode, [$option_mode])
+            };
+        }
+    };
+
+    (@inner_err raw $mode: ident, $e: expr) => { def_yeet!(@inner_multi_err $mode $e) };
+    (@inner_err streamed $mode: ident, $e: expr) => {
+        StreamedError::ShouldEnd(def_yeet!(@inner_multi_err $mode $e))
+    };
+    (@inner_multi_err single $e: expr) => { $e };
+    (@inner_multi_err vec $e: expr) => { vec![$e] };
+
+    (@inner_err_end vec $after: expr, $message: expr) => {
+        return err!(end_multi [{ UnexpectedEof, [
+            ($message, $after)
+        ]}])
+    };
+    (@inner_err_end single $after: expr, $message: expr) => {
+        return err!(end [{ UnexpectedEof, [
+            ($message, $after.clone())
+        ]}])
+    };
+
+    (@ret_map $_: ident passthrough $v: expr) => { $v };
+    (@ret_map $_: ident option_wrap $v: expr) => { Some($v) };
+    (@ret_map io_err vectorize $v: expr) => { $v };
+    (@ret_map proc_err vectorize $v: expr) => { $v.map_err(|e| e.map(|e| vec![e])) };
+    (@ret_map $err_ty: ident [] $v: expr) => { $v };
+    (@ret_map $err_ty: ident [$op: ident $($r: ident)*] $v: expr) => {
+        def_yeet!(@ret_map $err_ty $op def_yeet!(@ret_map $err_ty [$($r)*] $v))
+    };
+
+    (@match_option_return $from: expr, $after: expr, $mode: ident, $message: expr) => {
+        match $from {
+            Some(v) => def_yeet!(@inner_match v, streamed, $mode, [passthrough]),
+            None => def_yeet!(@inner_err_end $mode $after, $message),
+        }
+    };
+
+    (@match_option_optional $from: expr, $mode: ident, [$($ret_map: ident)*]) => {
+        match $from {
+            Some(v) => Some(def_yeet!(@inner_match v, streamed, $mode, [$($ret_map)*])),
+            None => None,
+        }
+    };
+
+    (@inner_match $from: expr, $stream_mode: ident, $mode: ident, [$($ret_map: tt)*]) => {
+        match $from {
+            StreamResult::Ok(v) => v,
+            StreamResult::IoError(e) => return def_yeet!(@ret_map io_err
+                [$($ret_map)*] StreamResult::IoError(e)
+            ),
+            StreamResult::ProcessingError(e) => {
+                return def_yeet!(@ret_map proc_err [$($ret_map)*] StreamResult::ProcessingError(
+                    def_yeet!(@inner_err $stream_mode $mode, e)
+                ))
+            }
+        }
+    };
+}
+
+pub(self) use def_yeet;
+
 #[derive(Debug)]
 pub struct LexerItem {
     pub token: LexerToken,
@@ -185,34 +298,23 @@ impl<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem
     type Item = MultiErrorItem<LexerItem>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        macro_rules! try_yield {
-            (option) => {
-                match self.source.next() {
-                    Some(StreamResult::Ok(v)) => Some(v),
-                    Some(StreamResult::IoError(e)) => return Some(StreamResult::IoError(e)),
-                    Some(StreamResult::ProcessingError(e)) => {
-                        return Some(StreamResult::ProcessingError(StreamedError::ShouldEnd(
-                            vec![e],
-                        )));
-                    }
-                    None => None,
-                }
-            };
-
-            () => {
-                try_yield!(option)?
-            };
-        }
+        def_yeet!(optionally get next from self.source => option_wrapped vec);
+        def_yeet!([option_wrap vectorize]);
         skip_possible(self.source);
-        let token = try_yield!();
+        match yeet_value!(opt_consume_any_ident(self.source)) {
+            Ok(v) => {
+                return Some(consume_statement(self.source, v));
+            }
+            Err(_) => {}
+        }
+        let token = try_next!()?;
         match token.token {
-            Token::Literal(LiteralToken::Ident(_)) => {
-                self.source.push(StreamResult::Ok(token));
-                Some(consume_statement(self.source))
+            Token::Ampersand => {
+
             }
             Token::GroupClosing(GroupType::Brace) => {
                 skip_possible(self.source);
-                let reports = match try_yield!(option) {
+                let reports = match try_next!() {
                     Some(SpanToken {
                         token: Token::Semicolon,
                         ..
@@ -254,7 +356,6 @@ impl<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem
                         },
                     }),
             ),
-            Token::Whitespace(_) | Token::Comment(_) => unreachable!(),
             _ => Some(StreamResult::Ok(LexerItem {
                 token: LexerToken::Invalid,
                 reports: Some(vec![err!(raw [{ UnexpectedToken, [
@@ -446,7 +547,7 @@ fn opt_consume_any_ident<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
-) -> Option<(ExtendedIdent, Span)> {
+) -> StreamItem<Result<(ExtendedIdent, Span), Option<Span>>> {
     let mut res = String::new();
     #[derive(Clone, Copy)]
     enum ExtendedIdentType {
@@ -491,8 +592,13 @@ fn opt_consume_any_ident<
         let new_type = match of_type.incr(&l.token) {
             Some(v) => v,
             None => {
+                let span = l.span.clone();
                 source.push(StreamResult::Ok(l));
-                break;
+                if ptr.is_none() {
+                    return StreamResult::Ok(Err(Some(span)));
+                } else {
+                    break;
+                }
             }
         };
         if ptr.is_none() {
@@ -504,25 +610,25 @@ fn opt_consume_any_ident<
     }
 
     let Some(ptr) = ptr else {
-        return None;
+        return StreamResult::Ok(Err(None));
     };
     let span = Span { ptr, span };
-    Some((
+    StreamResult::Ok(Ok((
         match of_type {
             ExtendedIdentType::Label => ExtendedIdent::Label(res),
             ExtendedIdentType::Node => ExtendedIdent::Node(res),
             ExtendedIdentType::Attribute => ExtendedIdent::Attribute(res),
         },
         span,
-    ))
+    )))
 }
 
 fn consume_any_ident<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
-) -> (ExtendedIdent, Span) {
-    opt_consume_any_ident(source).unwrap()
+) -> StreamItem<(ExtendedIdent, Span)> {
+    opt_consume_any_ident(source).map(|v| v.unwrap())
 }
 
 macro_rules! warning {
@@ -582,13 +688,14 @@ macro_rules! err {
     };
 
     (@message ($message: expr, $span: expr, $ptr: expr)) => {
-        Box::new(PrimitiveReportMessage::error(err!(@msg $message), $span, $ptr))
-            as Box<dyn ReportInlineMessage>
+        Box::new(crate::report::PrimitiveReportMessage::error(err!(@msg $message), $span, $ptr))
+            as Box<dyn crate::report::ReportInlineMessage>
     };
 
     (@message ($message: expr, $span: expr)) => {
-        Box::new(PrimitiveReportMessage::error(err!(@msg $message), $span.span, $span.ptr))
-            as Box<dyn ReportInlineMessage>
+        Box::new(crate::report::PrimitiveReportMessage::error(
+                err!(@msg $message), $span.span, $span.ptr)
+        ) as Box<dyn crate::report::ReportInlineMessage>
     };
 
     (@messages [$($message: tt),*]) => {
@@ -596,34 +703,43 @@ macro_rules! err {
     };
 
     (@segment $error_type: ident, [$($message: tt),*]) => {
-        Box::new(PrimitiveReportSegment::new(
-            Some(PrimitiveMainMessage::error(
-                Errors::$error_type.message(), Errors::$error_type.id(),
+        Box::new(crate::report::PrimitiveReportSegment::new(
+            Some(crate::report::PrimitiveMainMessage::error(
+                crate::errors::Errors::$error_type.message(),
+                crate::errors::Errors::$error_type.id(),
             )),
             err!(@messages [$($message),*]),
         ))
     };
 
     (@report $({ $error_type: ident, [$($message: tt),*$(,)?] }),*$(,)?) => {
-        Box::new(PrimitiveReport::new(
+        Box::new(crate::report::PrimitiveReport::new(
             vec![$(err!(@segment $error_type, [$($message),*])),*]
-        )) as ParseErrorReport
+        )) as crate::result::ParseErrorReport
     };
 
     (cont [$($t: tt)*]) => {
-        StreamResult::ProcessingError(StreamedError::CanContinue(err!(@report $($t)*)))
+        crate::result::StreamResult::ProcessingError(
+            crate::result::StreamedError::CanContinue(err!(@report $($t)*))
+        )
     };
 
     (cont_multi [$($t: tt)*]) => {
-        StreamResult::ProcessingError(StreamedError::CanContinue(vec![err!(@report $($t)*)]))
+        crate::result::StreamResult::ProcessingError(
+            crate::result::StreamedError::CanContinue(vec![err!(@report $($t)*)])
+        )
     };
 
     (end [$($t: tt)*]) => {
-        StreamResult::ProcessingError(StreamedError::ShouldEnd(err!(@report $($t)*)))
+        crate::result::StreamResult::ProcessingError(
+            crate::result::StreamedError::ShouldEnd(err!(@report $($t)*))
+        )
     };
 
     (end_multi [$($t: tt)*]) => {
-        StreamResult::ProcessingError(StreamedError::ShouldEnd(vec![err!(@report $($t)*)]))
+        crate::result::StreamResult::ProcessingError(
+            crate::result::StreamedError::ShouldEnd(vec![err!(@report $($t)*)])
+            )
     };
 
     (raw [$($t: tt)*]) => {
@@ -650,94 +766,71 @@ enum StatementStart {
     },
 }
 
-macro_rules! def_try_yield {
-    (@default_err) => { "unexpected end after this".to_string() };
-
-    (single_err $source: expr) => {
-        def_try_yield!(@def $source, single, def_try_yield!(@default_err))
-    };
-    (multi_err $source: expr) => {
-        def_try_yield!(@def $source, multi, def_try_yield!(@default_err))
-    };
-    (custom_single_err $source: expr, $message: expr) => {
-        def_try_yield!(@def $source, single, $message.to_string())
-    };
-    (custom_multi_err $source: expr, $message: expr) => {
-        def_try_yield!(@def $source, multi, $message.to_string())
-    };
-
-    (errs_only $mode: ident $source: expr) => {
-        def_try_yield!(@def_errs_only $source, $mode)
-    };
-
-    (@def $source: expr, $mode: ident, $message: expr) => {
-        macro_rules! try_yield {
-            ($after: expr) => {
-                def_try_yield!(@inner_match $source, $after, $mode, $message)
-            };
-        }
-    };
-
-    (@def_errs_only $source: expr, $mode: ident) => {
-        macro_rules! try_yield_errs {
-            () => {
-                def_try_yield!(@inner_match_errs_only $source, $mode)
-            };
-        }
-    };
-
-    (@inner_err single $e: expr) => { $e };
-    (@inner_err multi $e: expr) => { vec![$e] };
-
-    (@inner_err_end multi $after: expr, $message: expr) => {
-        return err!(end_multi [{ UnexpectedEof, [
-            ($message, $after)
-        ]}])
-    };
-    (@inner_err_end single $after: expr, $message: expr) => {
-        return err!(end [{ UnexpectedEof, [
-            ($message, $after.clone())
-        ]}])
-    };
-
-    (@inner_match $source: expr, $after: expr, $mode: ident, $message: expr) => {
-        match $source.next() {
-            Some(StreamResult::Ok(v)) => v,
-            Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
-            Some(StreamResult::ProcessingError(e)) => {
-                (return StreamResult::ProcessingError(StreamedError::ShouldEnd(
-                    def_try_yield!(@inner_err $mode e)
-                )))
+fn req_token_after<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
+    source: &mut I,
+    matcher_continue: impl Fn(&Token) -> bool,
+    matcher_end: impl Fn(&Token) -> bool,
+    err_msg_eof: &'static str,
+    err_after: &Span,
+    err_msg_after: &'static str,
+    err_msg_unexpected: &'static str,
+) -> StreamItem<SpanToken> {
+    def_yeet!(require next from source => single with message err_msg_eof.to_string());
+    loop {
+        let next = req_next!(err_after.clone());
+        if !matcher_continue(&next.token) {
+            if matcher_end(&next.token) {
+                break StreamResult::Ok(next);
+            } else {
+                return err!(cont [{ UnexpectedToken, [
+                    (err_msg_after.to_string(), err_after.clone()),
+                    (err_msg_unexpected.to_string(), next.span),
+                ]}]);
             }
-            None => def_try_yield!(@inner_err_end $mode $after, $message),
         }
-    };
-
-    (@inner_match_errs_only $source: expr, $mode: ident) => {
-        match $source.next() {
-            Some(StreamResult::Ok(v)) => Some(v),
-            Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
-            Some(StreamResult::ProcessingError(e)) => {
-                return StreamResult::ProcessingError(StreamedError::ShouldEnd(
-                    def_try_yield!(@inner_err $mode e)
-                ))
-            }
-            None => None,
-        }
-    };
+    }
 }
 
-pub(self) use def_try_yield;
+fn try_token_after<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
+    source: &mut I,
+    matcher_continue: impl Fn(&Token) -> bool,
+    matcher_end: impl Fn(&Token) -> bool,
+    err_msg_eof: &'static str,
+    err_after: &Span,
+    err_msg_after: &'static str,
+    err_msg_unexpected: &'static str,
+) -> StreamItem<(Option<SpanToken>, Option<ParseErrorReport>)> {
+    def_yeet!(require next from source => single with message err_msg_eof.to_string());
+    let mut error = None;
+    loop {
+        let next = req_next!(err_after.clone());
+        if !matcher_continue(&next.token) {
+            if matcher_end(&next.token) {
+                return StreamResult::Ok((Some(next), error));
+            } else {
+                if error.is_some() {
+                    break;
+                }
+                error = Some(err!(raw [{ UnexpectedToken, [
+                    (err_msg_after.to_string(), err_after.clone()),
+                    (err_msg_unexpected.to_string(), next.span),
+                ]}]));
+            }
+        }
+    }
+    StreamResult::Ok((None, error))
+}
 
 fn consume_statement<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
+    start: (ExtendedIdent, Span),
 ) -> MultiErrorItem<LexerItem> {
-    def_try_yield!(multi_err source);
-    let start = consume_any_ident(source);
+    def_yeet!(require next from source => vec with message default);
+    def_yeet!([vectorize]);
     let skipped = skip_possible(source);
-    let next = try_yield!(start.1);
+    let next = req_next!(start.1);
     match next.token {
         Token::At => {
             let to_push = if skipped > 0 {
@@ -748,23 +841,61 @@ fn consume_statement<
             } else {
                 None
             };
-            consume_node_address(source, start, next)
-                .map(|mut item| {
-                    if let Some(to_push) = to_push {
-                        let mut report = item.reports.unwrap_or_default();
-                        report.push(to_push);
-                        item.reports = Some(report);
-                    }
-                    item
-                })
-                .map_err(|e| e.map(|e| vec![e]))
+            let (node_name, mut errors) = deref_ident_to_node_name((start.0, &start.1), true);
+            if let Some(to_push) = to_push {
+                errors.push(to_push);
+            }
+            let (addr, e) = match yeet_value!(consume_node_address(source)) {
+                Ok(v) => v,
+                Err(Some(v)) => {
+                    return StreamResult::Ok(LexerItem {
+                        token: LexerToken::Invalid,
+                        reports: Some(vec![err!(raw [{ UnexpectedToken, [
+                            ("this is not a valid node address", v),
+                        ]}])]),
+                        prevent_compilation: true,
+                    });
+                }
+                Err(None) => {
+                    return StreamResult::Ok(LexerItem {
+                        token: LexerToken::Invalid,
+                        reports: Some(vec![err!(raw [{ UnexpectedToken, [
+                            ("expected a node address after this, encountered eof", next.span),
+                        ]}])]),
+                        prevent_compilation: true,
+                    });
+                }
+            };
+            errors.extend(e);
+            skip_possible(source);
+            let opening = yeet_value!(req_token_after(
+                source,
+                |t| { matches!(t, Token::Whitespace(_) | Token::Comment(_)) },
+                |t| { matches!(t, Token::GroupOpening(GroupType::Brace)) },
+                "expected a `{` somewhere after this node address, got eof",
+                &addr.1,
+                "after this node address",
+                "unexpected token, expected `{`"
+            ));
+            StreamResult::Ok(LexerItem {
+                token: LexerToken::NodeStart {
+                    name: (node_name, start.1),
+                    unit_address: Some(addr),
+                    opening_delimiter: opening.span,
+                },
+                prevent_compilation: !errors.is_empty(),
+                reports: Some(errors),
+            })
         }
         Token::Colon => {
             let (name, mut reports, abort) = deref_label((start.0, &start.1));
             if skipped > 0 {
                 let mut reports_inner = reports.unwrap_or_default();
                 reports_inner.push(err!(raw [{ UnexpectedWhitespace, [
-                    ("a whitespace is unexpected after this label name", start.1.clone()),
+                    (
+                        "a whitespace or a comment is unexpected after this label name",
+                        start.1.clone()
+                    ),
                     ("and before this colon", next.span.clone()),
                 ]}]));
                 reports = Some(reports_inner);
@@ -779,19 +910,19 @@ fn consume_statement<
             })
         }
         Token::GroupOpening(GroupType::Brace) => {
-            let (name, reports) = deref_node_name((start.0, &start.1), true);
+            let (name, reports) = deref_ident_to_node_name((start.0, &start.1), true);
             StreamResult::Ok(LexerItem {
                 token: LexerToken::NodeStart {
                     name: (name, start.1),
                     unit_address: None,
                     opening_delimiter: next.span,
                 },
-                prevent_compilation: reports.is_some(),
-                reports,
+                prevent_compilation: !reports.is_empty(),
+                reports: Some(reports),
             })
         }
         Token::Equal => {
-            let (property_name, reports, abort) = deref_attribute_name((start.0, &start.1));
+            let (property_name, reports, abort) = deref_attribute_name((start.0, &start.1), false);
             let (r, w, e) = match consume_attribute_value(source, &next.span) {
                 StreamResult::Ok(v) => v,
                 StreamResult::IoError(e) => return StreamResult::IoError(e),
@@ -816,7 +947,7 @@ fn consume_statement<
             })
         }
         Token::Semicolon => {
-            let (property_name, reports, abort) = deref_attribute_name((start.0, &start.1));
+            let (property_name, reports, abort) = deref_attribute_name((start.0, &start.1), false);
             StreamResult::Ok(LexerItem {
                 token: LexerToken::Statement(Statement::FlagProperty {
                     property_name: (property_name, start.1),
@@ -834,6 +965,15 @@ fn consume_statement<
             ] }])
         }
     }
+}
+
+fn consume_ref_node_start<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
+    source: &mut I,
+    ampersand: Span,
+) -> MultiErrorItem<LexerItem> {
+    todo!()
 }
 
 /// # Returns
@@ -867,24 +1007,27 @@ fn deref_label(name: (ExtendedIdent, &Span)) -> (String, Option<Vec<ParseErrorRe
 /// (value, errors, should_end)
 fn deref_attribute_name(
     name: (ExtendedIdent, &Span),
+    disable_opinions: bool,
 ) -> (String, Option<Vec<ParseErrorReport>>, bool) {
     let mut errors = Vec::new();
     let attr_name = name.0.req_attribute_name();
-    match attr_name.chars().next().unwrap() {
-        'a'..='z' | 'A'..='Z' | '#' => {}
-        _ => errors.push(
-            Box::new(PrimitiveReport::single(PrimitiveReportSegment::single(
-                PrimitiveMainMessage::warning(
-                    Warnings::WeirdPropertyName.message(),
-                    Warnings::WeirdPropertyName.id(),
-                ),
-                PrimitiveReportMessage::warning(
-                    "attribute names should begin with a letter or a hashtag".to_string(),
-                    1,
-                    name.1.ptr.clone(),
-                ),
-            ))) as Box<dyn Report>,
-        ),
+    if !disable_opinions {
+        match attr_name.chars().next().unwrap() {
+            'a'..='z' | 'A'..='Z' | '#' => {}
+            _ => errors.push(
+                Box::new(PrimitiveReport::single(PrimitiveReportSegment::single(
+                    PrimitiveMainMessage::warning(
+                        Warnings::WeirdPropertyName.message(),
+                        Warnings::WeirdPropertyName.id(),
+                    ),
+                    PrimitiveReportMessage::warning(
+                        "attribute names should begin with a letter or a hashtag".to_string(),
+                        1,
+                        name.1.ptr.clone(),
+                    ),
+                ))) as Box<dyn Report>,
+            ),
+        }
     }
     (
         attr_name,
@@ -897,99 +1040,6 @@ fn deref_attribute_name(
     )
 }
 
-fn deref_node_name(
-    name: (ExtendedIdent, &Span),
-    require_letter_start: bool,
-) -> (String, Option<Vec<ParseErrorReport>>) {
-    let mut errors = Vec::new();
-    let node_name = match name.0.req_node_name() {
-        Ok(v) => v,
-        Err((e, v)) => {
-            let symbol = e.first().unwrap();
-            let ptr = name.1.ptr.clone().offset(symbol);
-            errors.push(err!(raw [{ InvalidNodeName, [
-                ("invalid symbol in a node name", 1, ptr)
-            ]}]));
-            v
-        }
-    };
-    if require_letter_start {
-        match node_name.chars().next().unwrap() {
-            'a'..='z' | 'A'..='Z' => {}
-            _ => errors.push(err!(raw [{ InvalidNodeName, [
-                ("node names must start with a letter", 1, name.1.ptr.clone()),
-            ]}])),
-        }
-    }
-    (
-        node_name,
-        if !errors.is_empty() {
-            Some(errors)
-        } else {
-            None
-        },
-    )
-}
-
-fn consume_node_address<
-    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
->(
-    source: &mut I,
-    name: (ExtendedIdent, Span),
-    at: SpanToken,
-) -> StreamItem<LexerItem> {
-    def_try_yield!(single_err source);
-    let mut errors = Vec::new();
-    skip_block_comments(source);
-    let ident = opt_consume_any_ident(source)
-        .map(|(ident, span)| (deref_node_name((ident, &span), false), span));
-    let (address, address_span) = match ident {
-        Some(((ident, errors_inner), span)) => {
-            errors.extend(errors_inner.unwrap_or_default());
-            (ident, span)
-        }
-        None => {
-            return err!(cont [{ UnexpectedToken, [
-                ("expected a valid ident after this", at.span),
-            ]}]);
-        }
-    };
-    skip_possible(source);
-    let opening = try_yield!(address_span);
-    match opening.token {
-        Token::Equal | Token::Semicolon => {
-            return err!(cont [{ UnexpectedToken, [
-                ("unsure what this is meant to be", name.1),
-                ("this implies a node with an address", at.span),
-                ("this would be the node's address", address_span),
-                (
-                    "this implies an attribute, perhaps replace this with a node opening (`{`)",
-                    opening.span
-                ),
-            ] }]);
-        }
-        Token::GroupOpening(GroupType::Brace) => {}
-        _ => {
-            let span = opening.span.clone();
-            source.push(StreamResult::Ok(opening));
-            return err!(cont [{ UnexpectedToken, [("expected a node opening here", span)] }]);
-        }
-    }
-    let name_span = name.1.clone();
-    let (node_name, reports) = deref_node_name((name.0, &name.1), true);
-    let mut reports = reports.unwrap_or_default();
-    reports.extend(errors);
-    StreamResult::Ok(LexerItem {
-        token: LexerToken::NodeStart {
-            name: (node_name, name_span),
-            unit_address: Some((address, address_span)),
-            opening_delimiter: opening.span,
-        },
-        prevent_compilation: !reports.is_empty(),
-        reports: Some(reports),
-    })
-}
-
 type WarningReports = Vec<ParseErrorReport>;
 type ErrorReports = Vec<ParseErrorReport>;
 
@@ -999,7 +1049,7 @@ fn consume_attribute_value<
     source: &mut I,
     eq: &Span,
 ) -> MultiErrorItem<(Vec<Item>, WarningReports, ErrorReports)> {
-    def_try_yield!(custom_multi_err source,
+    def_yeet!(require next from source => vec with message
         "this value assignment does not end until eof, perhaps you forgot a semicolon?"
     );
     auto_parser!(skip_tokens skip_to_expr_delim, |v| {
@@ -1033,7 +1083,7 @@ fn consume_attribute_value<
     let mut expecting_item = true;
     loop {
         skip_possible(source);
-        let token = try_yield!(eq.clone());
+        let token = req_next!(eq.clone());
         match (token.token, expecting_item) {
             (Token::Whitespace(_) | Token::Comment(_), _) => unreachable!(),
             (Token::Comma, false) => {
@@ -1122,13 +1172,13 @@ fn consume_integer<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<Token
     source: &mut I,
     lt: Span,
 ) -> MultiErrorItem<(Item, WarningReports, ErrorReports)> {
-    def_try_yield!(custom_multi_err source, "this remains unclosed until eof");
+    def_yeet!(require next from source => vec with message "this remains unclosed until eof");
     let mut res = Vec::new();
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
     loop {
         skip_possible(source);
-        let token = try_yield!(lt);
+        let token = req_next!(lt);
         match token.token {
             Token::Literal(LiteralToken::Ident(GenericLiteral {
                 of_type: GenericLiteralType::DecimalNumeric,
@@ -1207,12 +1257,12 @@ fn consume_byte_string<
     source: &mut I,
     opening_bracket: Span,
 ) -> MultiErrorItem<(Item, ErrorReports)> {
-    def_try_yield!(custom_multi_err source, "this remains unclosed until eof");
+    def_yeet!(require next from source => vec with message "this remains unclosed until eof");
     let mut res = Vec::new();
     let mut errors = Vec::new();
     loop {
         skip_possible(source);
-        let token = try_yield!(opening_bracket);
+        let token = req_next!(opening_bracket);
         match token.token {
             Token::Literal(LiteralToken::Ident(GenericLiteral {
                 of_type: GenericLiteralType::DecimalNumeric,

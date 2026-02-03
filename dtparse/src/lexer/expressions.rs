@@ -1,14 +1,14 @@
 use crate::{
     lexer::{
         ArithmeticOperation, BitwiseOperation, Expression, LogicalOperation, MultiErrorItem,
-        NumericLiteral, Reference, RelationalOperation, TokenizerStreamItem, consume_any_ident,
-        def_try_yield, deref_node_name, err, opt_consume_any_ident, skip_possible, warning,
+        NumericLiteral, Reference, RelationalOperation, TokenizerStreamItem, def_yeet, err,
+        node::consume_node_path, skip_possible, warning,
     },
     report::{
         PrimitiveMainMessage, PrimitiveReport, PrimitiveReportMessage, PrimitiveReportSegment,
         ReportInlineMessage,
     },
-    result::{Errors, ParseErrorReport, StreamResult, StreamedError, Warnings},
+    result::{ParseErrorReport, StreamResult, StreamedError, Warnings},
     stream_utils::StreamPrepend,
     tokenizer::{
         ArithmeticOperator, BitwiseOperator, GenericLiteral, GenericLiteralType, GroupType,
@@ -791,10 +791,24 @@ pub fn consume_label_reference<
     source: &mut I,
     ampersand: Span,
 ) -> MultiErrorItem<Reference> {
-    def_try_yield!(multi_err source);
-    let next = try_yield!(ampersand);
+    def_yeet!(require next from source => vec with message default);
+    def_yeet!([vectorize]);
+    let next = req_next!(ampersand);
     match next.token {
-        Token::GroupOpening(GroupType::Brace) => consume_node_reference(source, next.span),
+        Token::GroupOpening(GroupType::Brace) => {
+            let (r, errors) = yeet_value!(consume_node_path(source, &next.span));
+            if !errors.is_empty() {
+                return StreamResult::ProcessingError(StreamedError::CanContinue(errors));
+            }
+            let Some((path, addr)) = r else {
+                return StreamResult::ProcessingError(StreamedError::CanContinue(vec![
+                    err!(raw [{
+                        InvalidNodePath, [("this remains unclosed until eof", next.span)]
+                    }]),
+                ]));
+            };
+            StreamResult::Ok(Reference::NodePath(path, addr))
+        }
         Token::Literal(LiteralToken::Ident(GenericLiteral {
             content,
             of_type: GenericLiteralType::Ident,
@@ -816,129 +830,13 @@ pub fn consume_label_reference<
     }
 }
 
-fn require_node_address<
-    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
->(
-    source: &mut I,
-    at: &Span,
-) -> MultiErrorItem<(String, Span)> {
-    def_try_yield!(single_err source);
-    let Some(((ident, errors), span)) = opt_consume_any_ident(source)
-        .map(|(ident, span)| (deref_node_name((ident, &span), false), span))
-    else {
-        return err!(cont_multi [{ UnexpectedToken, [
-            ("expected a valid node address after this", at.clone()),
-        ]}]);
-    };
-    if let Some(reports) = errors {
-        return StreamResult::ProcessingError(StreamedError::CanContinue(reports));
-    }
-    StreamResult::Ok((ident, span))
-}
-
-fn consume_node_reference<
-    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
->(
-    source: &mut I,
-    opening: Span,
-) -> MultiErrorItem<Reference> {
-    def_try_yield!(multi_err source);
-    let mut res_errors = Vec::new();
-    let mut address = None;
-    let mut res = Vec::new();
-    let mut tmp = None;
-    let mut found_brace = false;
-    loop {
-        let token = match source.next() {
-            Some(StreamResult::Ok(v)) => v,
-            Some(StreamResult::IoError(e)) => return StreamResult::IoError(e),
-            Some(StreamResult::ProcessingError(e)) => {
-                return StreamResult::ProcessingError(StreamedError::ShouldEnd(vec![e]));
-            }
-            None => {
-                return err!(end_multi [{ UnmatchedDelimiter, [
-                    ("encountered an end of file this brace was closed", opening),
-                ]}]);
-            }
-        };
-        match token.token {
-            Token::GroupClosing(GroupType::Brace) => {
-                found_brace = true;
-                break;
-            }
-            Token::Slash => {
-                if tmp.is_none() {
-                    res_errors.push(err!(raw [{ InvalidNodePath, [
-                        (
-                            "node path segments can't be empty, like the one before this slash",
-                            token.span.clone()
-                        )
-                    ]}]));
-                }
-                res.push(tmp.take().unwrap());
-            }
-            Token::Literal(_)
-            | Token::Comma
-            | Token::Period
-            | Token::ArithmeticOperator(ArithmeticOperator::Plus | ArithmeticOperator::Dash)
-            | Token::Hash
-            | Token::QuestionMark => {
-                if tmp.is_some() {
-                    panic!("invalid tmp handling when consuming node path");
-                }
-                source.push(StreamResult::Ok(token));
-                let (ident, span) = consume_any_ident(source);
-                let (ident, errors) = deref_node_name((ident, &span), true);
-                if let Some(errors) = errors {
-                    res_errors.extend(errors.into_iter());
-                }
-                tmp = Some((ident, span));
-            }
-            Token::Comment(_) | Token::Whitespace(_) => {}
-            Token::At => {
-                address = match require_node_address(source, &token.span) {
-                    StreamResult::Ok(v) => Some(v),
-                    StreamResult::IoError(e) => return StreamResult::IoError(e),
-                    StreamResult::ProcessingError(StreamedError::ShouldEnd(e)) => {
-                        return StreamResult::ProcessingError(StreamedError::ShouldEnd(e));
-                    }
-                    StreamResult::ProcessingError(StreamedError::CanContinue(e)) => {
-                        res_errors.extend(e);
-                        None
-                    }
-                };
-                break;
-            }
-            _ => {
-                res_errors.push(err!(raw [{ InvalidNodePath, [
-                    ("invalid symbol here", token.span),
-                ]}]));
-            }
-        }
-    }
-    if !found_brace {
-        skip_possible(source);
-        let address_span = address.as_ref().map(|v| v.1.clone()).unwrap();
-        match try_yield!(address_span).token {
-            Token::GroupClosing(GroupType::Brace) => {}
-            _ => {
-                return err!(end_multi [{ InvalidNodePath, [
-                    ("expected a closing brace to match this", opening.clone()),
-                    ("right after this node address", address_span),
-                ]}]);
-            }
-        }
-    }
-    StreamResult::Ok(Reference::NodePath(res, address))
-}
-
 pub fn consume_expression<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
     start: Span,
 ) -> MultiErrorItem<(Expression, WarningReports, ErrorReports)> {
-    def_try_yield!(multi_err source);
+    def_yeet!(require next from source => vec with message default);
     let mut stack = GroupParsingStack::new(start.clone());
     let mut res_errors = Vec::new();
     let mut res_warnings = Vec::new();
@@ -983,7 +881,7 @@ pub fn consume_expression<
     }
     loop {
         skip_possible(source);
-        let token = try_yield!(start);
+        let token = req_next!(start);
         match token.token {
             Token::Literal(LiteralToken::Ident(GenericLiteral {
                 mut content,

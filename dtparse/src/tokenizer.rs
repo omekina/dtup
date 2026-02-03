@@ -622,7 +622,7 @@ where
             '@' => (Token::At, 1),
             '#' => (Token::Hash, 1),
             '?' => (Token::QuestionMark, 1),
-            v @ _ => {
+            v => {
                 return Some(StreamResult::ProcessingError(StreamedError::CanContinue(
                     simple_error(
                         Errors::InvalidCharacter,
@@ -664,7 +664,7 @@ fn consume_line_comment<I>(source: &mut I) -> TokenizerResult<(String, usize)>
 where
     I: Iterator<Item = SourceResult<char>> + StreamPrepend<SourceResult<char>>,
 {
-    let mut len = 0;
+    let mut len = 2;
     let mut res = String::new();
     while let Some(c) = try_yield!(source.next()) {
         match c {

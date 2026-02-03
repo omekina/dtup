@@ -1,15 +1,12 @@
-use crate::errors::Errors;
-use crate::lexer::skip_possible;
-use crate::report::{
-    PrimitiveMainMessage, PrimitiveReport, PrimitiveReportMessage, PrimitiveReportSegment,
-    ReportInlineMessage,
-};
-use crate::result::{ParseErrorReport, StreamResult, StreamedError};
+use crate::lexer::expressions::consume_label_reference;
+use crate::lexer::node::{NodeAddress, NodeName, consume_node_id};
+use crate::lexer::{Reference, deref_attribute_name, skip_possible, try_token_after};
+use crate::result::{StreamResult, StreamedError};
 use crate::tokenizer::{GenericLiteralType, SpanToken};
 use crate::{
     lexer::{
-        ErrorReports, LexerToken, StreamItem, TokenizerStreamItem, auto_parser, def_try_yield, err,
-        opt_consume_any_ident, skip_opt,
+        ErrorReports, LexerToken, StreamItem, TokenizerStreamItem, def_yeet, err,
+        opt_consume_any_ident,
     },
     stream_utils::StreamPrepend,
     tokenizer::{GenericLiteral, GroupType, LiteralToken, Span, Token},
@@ -20,6 +17,8 @@ enum CompilerDirectiveType {
     Include,
     OmitIfNoRef,
     Bits,
+    DeleteNode,
+    DeleteProperty,
 }
 
 impl std::str::FromStr for CompilerDirectiveType {
@@ -31,6 +30,8 @@ impl std::str::FromStr for CompilerDirectiveType {
             "include" => Ok(CompilerDirectiveType::Include),
             "omit-if-no-ref" => Ok(CompilerDirectiveType::OmitIfNoRef),
             "bits" => Ok(CompilerDirectiveType::Bits),
+            "delete-node" => Ok(CompilerDirectiveType::DeleteNode),
+            "delete-property" => Ok(CompilerDirectiveType::DeleteProperty),
             _ => Err(()),
         }
     }
@@ -48,6 +49,20 @@ pub enum CompilerDirective {
         size: (String, Span),
     },
     OmitIfNoRef(Span),
+    DeleteNode {
+        delete_node: Span,
+        target: NodeTarget,
+    },
+    DeleteProperty {
+        delete_property: Span,
+        target: (String, Span),
+    },
+}
+
+#[derive(Debug)]
+pub enum NodeTarget {
+    Node((NodeName, NodeAddress)),
+    Reference(Reference),
 }
 
 pub fn consume_compiler_directive_or_root_node<
@@ -56,10 +71,10 @@ pub fn consume_compiler_directive_or_root_node<
     source: &mut I,
     slash: Span,
 ) -> StreamItem<(Option<LexerToken>, ErrorReports)> {
-    def_try_yield!(single_err source);
+    def_yeet!(require next from source => single with message default);
     let mut errors = Vec::new();
     loop {
-        let ident = try_yield!(slash);
+        let ident = req_next!(slash);
         match ident.token {
             Token::Literal(LiteralToken::Ident(GenericLiteral { content, .. })) => {
                 return consume_compiler_directive_arguments(source, slash, (content, ident.span))
@@ -109,10 +124,10 @@ pub fn consume_compiler_directive<
     source: &mut I,
     slash: Span,
 ) -> StreamItem<(Option<CompilerDirective>, ErrorReports)> {
-    def_try_yield!(single_err source);
+    def_yeet!(require next from source => single with message default);
     let mut errors = Vec::new();
     loop {
-        let ident = try_yield!(slash);
+        let ident = req_next!(slash);
         match ident.token {
             Token::Literal(LiteralToken::Ident(GenericLiteral { content, .. })) => {
                 return consume_compiler_directive_arguments(source, slash, (content, ident.span))
@@ -154,22 +169,23 @@ pub fn consume_compiler_directive_arguments<
     slash: Span,
     ident: (String, Span),
 ) -> StreamItem<(Option<CompilerDirective>, ErrorReports)> {
-    def_try_yield!(
-        custom_single_err source, "expected `/` before eof to finish this compiler directive"
+    def_yeet!(require next from source => single with message
+        "expected `/` before eof to finish this compiler directive"
     );
+    def_yeet!();
     let mut errors = Vec::new();
     let mut ident_inner = ident.0;
     let ident_ptr = ident.1.ptr;
     let mut ident_span = ident.1.span;
-    match opt_consume_any_ident(source) {
-        Some(v) => {
-            ident_span += ident_span;
+    match yeet_value!(opt_consume_any_ident(source)) {
+        Ok(v) => {
+            ident_span += v.1.span;
             ident_inner.push_str(&v.0.req_attribute_name());
         }
-        None => {}
+        Err(_) => {}
     };
     let end = loop {
-        let end = try_yield!(slash);
+        let end = req_next!(slash);
         match end.token {
             Token::Slash => break end,
             Token::Whitespace(_) => {
@@ -205,11 +221,11 @@ pub fn consume_compiler_directive_arguments<
         ]}]));
         return StreamResult::Ok((None, errors));
     };
-    def_try_yield!(errs_only single source);
+    def_yeet!(optionally get next from source => single);
     match directive_type {
         CompilerDirectiveType::Include => {
             skip_possible(source);
-            match try_yield_errs!() {
+            match try_next!() {
                 Some(SpanToken {
                     token: Token::Literal(LiteralToken::String(v)),
                     span,
@@ -238,7 +254,7 @@ pub fn consume_compiler_directive_arguments<
         }
         CompilerDirectiveType::DtsHeader => {
             skip_possible(source);
-            match try_yield_errs!() {
+            match try_next!() {
                 Some(SpanToken {
                     span,
                     token: Token::Semicolon,
@@ -268,7 +284,7 @@ pub fn consume_compiler_directive_arguments<
         }
         CompilerDirectiveType::Bits => {
             skip_possible(source);
-            match try_yield_errs!() {
+            match try_next!() {
                 Some(SpanToken {
                     span,
                     token:
@@ -314,5 +330,136 @@ pub fn consume_compiler_directive_arguments<
                 }
             }
         }
+        CompilerDirectiveType::DeleteNode => {
+            compiler_directive_delete_node(source, errors, ident_span, end)
+        }
+        CompilerDirectiveType::DeleteProperty => {
+            skip_possible(source);
+            let attribute = match yeet_value!(opt_consume_any_ident(source)) {
+                Ok(v) => v,
+                Err(Some(e)) => {
+                    errors.push(err!(raw [{ UnexpectedToken, [
+                        ("this directive requires an attribute name", ident_span),
+                        ("expected a valid attribute name here", e),
+                    ]}]));
+                    return StreamResult::Ok((None, errors));
+                }
+                Err(None) => {
+                    errors.push(err!(raw [{ UnexpectedToken, [(
+                        "this directive requires an attribute name as an argument, but got eof",
+                        ident_span
+                    )]}]));
+                    return StreamResult::Ok((None, errors));
+                }
+            };
+            let (attribute_ident, e, _) = deref_attribute_name((attribute.0, &attribute.1), true);
+            if let Some(e) = e {
+                errors.extend(e);
+            }
+            skip_possible(source);
+            let (_, error) = yeet_value!(try_token_after(
+                source,
+                |_| false,
+                |t| matches!(t, Token::Semicolon),
+                "expected a semicolon after the node id argument for this directive, got eof",
+                &ident_span,
+                "expected a semicolon after the node id argument for this directive",
+                "this was unexpected, perhaps put a semicolon before?",
+            ));
+            if let Some(error) = error {
+                errors.push(error);
+            }
+            StreamResult::Ok((
+                Some(CompilerDirective::DeleteProperty {
+                    delete_property: ident_span,
+                    target: (attribute_ident, attribute.1),
+                }),
+                errors,
+            ))
+        }
     }
+}
+
+pub fn compiler_directive_delete_node<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
+    source: &mut I,
+    mut errors: ErrorReports,
+    ident_span: Span,
+    end: SpanToken,
+) -> StreamItem<(Option<CompilerDirective>, ErrorReports)> {
+    def_yeet!();
+    skip_possible(source);
+    let Some(token) = source.next() else {
+        errors.push(err!(raw [{ UnexpectedEof, [
+            (
+                "expected a node name or a label as an argument for this directive, but got eof",
+                ident_span
+            ),
+            ("after this", end.span),
+        ]}]));
+        return StreamResult::Ok((None, errors));
+    };
+    let token = yeet_value!(token.map_err(|e| StreamedError::ShouldEnd(e)));
+    let target = match token.token {
+        Token::Ampersand => {
+            NodeTarget::Reference(match consume_label_reference(source, token.span) {
+                StreamResult::Ok(v) => v,
+                StreamResult::IoError(e) => return StreamResult::IoError(e),
+                StreamResult::ProcessingError(StreamedError::ShouldEnd(mut e)) => {
+                    let last = e.pop().unwrap();
+                    return StreamResult::ProcessingError(StreamedError::ShouldEnd(last));
+                }
+                StreamResult::ProcessingError(StreamedError::CanContinue(e)) => {
+                    errors.extend(e);
+                    return StreamResult::Ok((None, errors));
+                }
+            })
+        }
+        _ => {
+            source.push(StreamResult::Ok(token));
+            let (name, address, e) = match yeet_value!(consume_node_id(source)) {
+                Ok(v) => v,
+                Err(Some(e)) => {
+                    errors.push(err!(raw [{ UnexpectedToken, [
+                        (
+                            "expected a node name (or a `&`) as an argument for this directive",
+                            ident_span
+                        ),
+                        ("this is not a valid node name", e),
+                    ]}]));
+                    return StreamResult::Ok((None, errors));
+                }
+                Err(None) => {
+                    errors.push(err!(raw [{ UnexpectedEof, [
+                        ("expected a node name as an argument for this directive", ident_span),
+                        ("after this, but encountered eof", end.span),
+                    ]}]));
+                    return StreamResult::Ok((None, errors));
+                }
+            };
+            errors.extend(e);
+            NodeTarget::Node((name, address))
+        }
+    };
+    skip_possible(source);
+    let (_, error) = yeet_value!(try_token_after(
+        source,
+        |_| false,
+        |t| matches!(t, Token::Semicolon),
+        "expected a semicolon after the node id argument for this directive, got eof",
+        &ident_span,
+        "expected a semicolon after the node id argument for this directive",
+        "this was unexpected, perhaps put a semicolon before?",
+    ));
+    if let Some(error) = error {
+        errors.push(error);
+    }
+    StreamResult::Ok((
+        Some(CompilerDirective::DeleteNode {
+            delete_node: ident_span,
+            target,
+        }),
+        errors,
+    ))
 }
