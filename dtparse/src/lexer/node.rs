@@ -1,11 +1,11 @@
 use crate::{
     ParseErrorReport, StreamResult, StreamedError,
     lexer::{
-        ErrorReports, ExtendedIdent, StreamItem, TokenizerStreamItem, def_yeet, err,
-        opt_consume_any_ident,
+        ErrorReports, ExtendedIdent, StreamItem, TokenizerStreamItem, auto_parser, def_yeet, err,
+        opt_consume_any_ident, skip_while_no_push,
     },
     stream_utils::StreamPrepend,
-    tokenizer::{GroupType, Span, Token},
+    tokenizer::{GroupType, Span, Token, SpanToken},
 };
 
 pub(super) type NodeName = (String, Span);
@@ -75,23 +75,27 @@ fn consume_node_path_part<
     source: &mut I,
     path: &mut Vec<(String, Span)>,
     errors: &mut ErrorReports,
-) -> StreamItem<()> {
+) -> StreamItem<bool> {
     def_yeet!();
     match yeet_value!(consume_node_name(source)) {
         Ok((v, e)) => {
             errors.extend(e);
             path.push(v);
-            StreamResult::Ok(())
+            StreamResult::Ok(true)
         }
         Err(Some(e)) => {
             errors.push(err!(raw [{ UnexpectedToken, [
                 ("this not seem like a valid node path part", e),
             ]}]));
-            StreamResult::Ok(())
+            StreamResult::Ok(false)
         }
         Err(None) => unreachable!(),
     }
 }
+
+auto_parser!(skip_tokens_no_push skip_to_node_path_end, |t| {
+    !matches!(t, &Token::Semicolon)
+});
 
 pub(super) fn consume_node_path<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
@@ -115,12 +119,14 @@ pub(super) fn consume_node_path<
                         errors.push(err!(raw [{
                             UnexpectedWhitespace, [("node paths can't contain comments", v.span)]
                         }]));
+                        skip_to_node_path_end(source);
                         return StreamResult::Ok((None, errors));
                     }
                     Token::Whitespace(_) => {
                         errors.push(err!(raw [{
                             UnexpectedWhitespace, [("node paths can't contain whitespace", v.span)]
                         }]));
+                        skip_to_node_path_end(source);
                         return StreamResult::Ok((None, errors));
                     }
                     Token::Slash => {
@@ -131,7 +137,10 @@ pub(super) fn consume_node_path<
                     Token::At => break v,
                     _ => {
                         source.push(StreamResult::Ok(v));
-                        yeet_value!(consume_node_path_part(source, &mut path, &mut errors));
+                        if !yeet_value!(consume_node_path_part(source, &mut path, &mut errors)) {
+                            skip_to_node_path_end(source);
+                            return StreamResult::Ok((None, errors));
+                        }
                     }
                 }
             }

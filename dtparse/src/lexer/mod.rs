@@ -39,6 +39,11 @@ pub enum LexerToken {
         slash: Span,
         opening_delimiter: Span,
     },
+    /// `&node_label {`
+    RefNodeStart {
+        reference: Reference,
+        opening_delimiter: Span,
+    },
     NodeStart {
         name: (String, Span),
         unit_address: Option<(String, Span)>,
@@ -309,9 +314,7 @@ impl<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem
         }
         let token = try_next!()?;
         match token.token {
-            Token::Ampersand => {
-
-            }
+            Token::Ampersand => Some(consume_ref_node_start(self.source, token.span)),
             Token::GroupClosing(GroupType::Brace) => {
                 skip_possible(self.source);
                 let reports = match try_next!() {
@@ -385,6 +388,23 @@ pub(self) fn skip_while<
     skipped
 }
 
+pub(self) fn skip_while_no_push<
+    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
+>(
+    source: &mut I,
+    skipper: impl Fn(&TokenizerStreamItem) -> bool,
+) -> usize {
+    let mut skipped = 0;
+    while let Some(v) = source.next() {
+        if !skipper(&v) {
+            break;
+        } else {
+            skipped += 1;
+        }
+    }
+    skipped
+}
+
 pub(self) fn skip_tokens<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
@@ -432,12 +452,25 @@ macro_rules! auto_parser {
         auto_parser!(_skip_wrapper $name, $skipper, skip_while);
     };
 
+    (skip_no_push $name: ident, $skipper: expr) => {
+        auto_parser!(_skip_wrapper $name, $skipper, skip_while_no_push);
+    };
+
     (skip_single $name: ident, $skipper: expr) => {
         auto_parser!(_skip_wrapper $name, $skipper, skip_opt);
     };
 
     (skip_tokens $name: ident, $skipper: expr) => {
         auto_parser!(skip $name, |v| {
+            match v {
+                StreamResult::Ok(SpanToken { token, .. }) => $skipper(token),
+                _ => false,
+            }
+        });
+    };
+
+    (skip_tokens_no_push $name: ident, $skipper: expr) => {
+        auto_parser!(skip_no_push $name, |v| {
             match v {
                 StreamResult::Ok(SpanToken { token, .. }) => $skipper(token),
                 _ => false,
@@ -960,8 +993,8 @@ fn consume_statement<
             let span = next.span.clone();
             source.push(StreamResult::Ok(next));
             err!(cont_multi [{ UnexpectedToken, [
-                ("expected a valid statement continuation after this", start.1),
-                ("unexpected token here", span)
+                ("this is a candidate for a statement start, a node/attribute name", start.1),
+                ("however this is an unexpected continuation in both cases", span)
             ] }])
         }
     }
@@ -973,7 +1006,40 @@ fn consume_ref_node_start<
     source: &mut I,
     ampersand: Span,
 ) -> MultiErrorItem<LexerItem> {
-    todo!()
+    let mut errors = Vec::new();
+    let reference = match consume_label_reference(source, ampersand.clone()) {
+        StreamResult::Ok(v) => Some(v),
+        StreamResult::IoError(e) => return StreamResult::IoError(e),
+        StreamResult::ProcessingError(StreamedError::CanContinue(e)) => {
+            errors = e;
+            None
+        }
+        StreamResult::ProcessingError(e) => return StreamResult::ProcessingError(e),
+    };
+    def_yeet!([vectorize]);
+    let (opening, e) = yeet_value!(try_token_after(
+        source,
+        |t| { matches!(t, Token::Whitespace(_) | Token::Comment(_)) },
+        |t| { matches!(t, Token::GroupOpening(GroupType::Brace)) },
+        "encountered a node opening after this label",
+        &ampersand,
+        "after this label",
+        "expected a node opening"
+    ));
+    if let Some(e) = e {
+        errors.push(e);
+    }
+    StreamResult::Ok(LexerItem {
+        token: match (reference, opening) {
+            (Some(reference), Some(opening)) => LexerToken::RefNodeStart {
+                reference,
+                opening_delimiter: opening.span,
+            },
+            _ => LexerToken::Invalid,
+        },
+        prevent_compilation: !errors.is_empty(),
+        reports: Some(errors),
+    })
 }
 
 /// # Returns
