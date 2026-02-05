@@ -239,7 +239,7 @@ impl GenericLiteral {
             '0'..='9' => GenericLiteralType::DecimalNumeric,
             'a'..='f' | 'A'..='F' => GenericLiteralType::HexadecimalNumeric { prefix: false },
             'g'..='z' | 'G'..='Z' | '_' => GenericLiteralType::Ident,
-            v @ _ => panic!("bad generic literal handling for symbol: {:?}", v),
+            v => panic!("bad generic literal handling for symbol: {:?}", v),
         };
         Self {
             content: symbol.to_string(),
@@ -522,14 +522,14 @@ where
             ($($peek_match: expr => $yield: expr),*$(,)? => $fallback_yield: expr) => {
                 match self.source.next() {
                     $(Some(StreamResult::Ok($peek_match)) => ($yield, 2),)*
-                    v @ _ => peek_yield!(@fallback v, $fallback_yield),
+                    v => peek_yield!(@fallback v, $fallback_yield),
                 }
             };
 
             (@custom $($peek_match: expr => $yield: expr),*$(,)? => $fallback_yield: expr) => {
                 match self.source.next() {
                     $(Some(StreamResult::Ok($peek_match)) => $yield,)*
-                    v @ _ => peek_yield!(@fallback v, $fallback_yield),
+                    v => peek_yield!(@fallback v, $fallback_yield),
                 }
             };
 
@@ -672,7 +672,7 @@ where
                 source.push(SourceResult::Ok(c));
                 break;
             }
-            v @ _ => {
+            v => {
                 len += 1;
                 res.push(v);
             }
@@ -696,11 +696,11 @@ where
                     break;
                 }
                 None => break,
-                Some(v @ _) => {
+                Some(v) => {
                     source.push(SourceResult::Ok(v));
                 }
             },
-            v @ _ => {
+            v => {
                 len += 1;
                 res.push(v);
             }
@@ -775,7 +775,7 @@ where
                     start,
                 )));
             }
-            v @ _ => res.push(v),
+            v => res.push(v),
         }
     }
 

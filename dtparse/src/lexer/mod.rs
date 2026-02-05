@@ -18,9 +18,9 @@ use crate::{
     },
 };
 
-mod compiler_directives;
-mod expressions;
-mod node;
+pub(crate) mod compiler_directives;
+pub(crate) mod expressions;
+pub(crate) mod node;
 
 type StreamItem<T> = StreamResult<T, StreamedError<ParseErrorReport>>;
 type TokenizerStreamItem = StreamResult<SpanToken, ParseErrorReport>;
@@ -78,8 +78,17 @@ pub enum ArrayItem<T> {
 
 #[derive(Debug, PartialEq)]
 pub enum NumericLiteral {
-    Decimal(String),
-    Hexadecimal(String),
+    Decimal((String, Span)),
+    Hexadecimal((String, Span)),
+}
+
+impl NumericLiteral {
+    pub fn span(&self) -> &Span {
+        match self {
+            Self::Hexadecimal((_, span)) => span,
+            Self::Decimal((_, span)) => span,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -119,7 +128,7 @@ pub enum BitwiseOperation {
 #[derive(Debug, PartialEq)]
 pub enum Expression {
     Invalid,
-    NumericLiteral((NumericLiteral, Span)),
+    NumericLiteral(NumericLiteral),
     Group(Box<Expression>),
     ArithmeticOperation {
         left: Box<Expression>,
@@ -288,7 +297,7 @@ macro_rules! def_yeet {
     };
 }
 
-pub(self) use def_yeet;
+use def_yeet;
 
 #[derive(Debug)]
 pub struct LexerItem {
@@ -370,9 +379,7 @@ impl<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem
     }
 }
 
-pub(self) fn skip_while<
-    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
->(
+fn skip_while<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
     source: &mut I,
     skipper: impl Fn(&TokenizerStreamItem) -> bool,
 ) -> usize {
@@ -388,7 +395,7 @@ pub(self) fn skip_while<
     skipped
 }
 
-pub(self) fn skip_while_no_push<
+fn skip_while_no_push<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
@@ -405,9 +412,7 @@ pub(self) fn skip_while_no_push<
     skipped
 }
 
-pub(self) fn skip_tokens<
-    I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
->(
+fn skip_tokens<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
     source: &mut I,
     skipper: impl Fn(&Token) -> bool,
 ) -> usize {
@@ -417,9 +422,32 @@ pub(self) fn skip_tokens<
     })
 }
 
-pub(self) fn skip_opt<
+fn skip_tokens_no_push<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
+    source: &mut I,
+    skipper: impl Fn(&Token) -> bool,
+) -> usize {
+    let mut skipped = 0;
+    while let Some(v) = source.next() {
+        match v {
+            StreamResult::Ok(v) => {
+                if !skipper(&v.token) {
+                    break;
+                } else {
+                    skipped += 1;
+                }
+            }
+            v => {
+                source.push(v);
+                break;
+            }
+        }
+    }
+    skipped
+}
+
+fn skip_opt<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>>(
     source: &mut I,
     skipper: impl Fn(&TokenizerStreamItem) -> bool,
 ) -> usize {
@@ -470,12 +498,7 @@ macro_rules! auto_parser {
     };
 
     (skip_tokens_no_push $name: ident, $skipper: expr) => {
-        auto_parser!(skip_no_push $name, |v| {
-            match v {
-                StreamResult::Ok(SpanToken { token, .. }) => $skipper(token),
-                _ => false,
-            }
-        });
+        auto_parser!(_skip_wrapper $name, $skipper, skip_tokens_no_push);
     };
 
     (skip_token $name: ident, $skipper: expr) => {
@@ -497,7 +520,7 @@ macro_rules! auto_parser {
     };
 }
 
-pub(self) use auto_parser;
+use auto_parser;
 
 auto_parser!(skip_tokens skip_block_comments, |v| {
     matches!(v, &Token::Comment(Comment { of_type: CommentType::Block, .. }))
@@ -524,6 +547,10 @@ auto_parser!(skip_tokens skip_possible_inline, |v: &Token| {
 
 auto_parser!(skip_tokens skip_possible, |v| {
     matches!(v, &(Token::Whitespace(_) | Token::Comment(_)))
+});
+
+auto_parser!(skip_tokens_no_push skip_to_statement_end, |t| {
+    matches!(t, &Token::Semicolon)
 });
 
 enum ExtendedIdent {
@@ -591,7 +618,7 @@ fn opt_consume_any_ident<
     impl ExtendedIdentType {
         fn incr(self, token: &Token) -> Option<Self> {
             match (self, token) {
-                (v @ _, Token::Literal(LiteralToken::Ident(_))) => Some(v),
+                (v, Token::Literal(LiteralToken::Ident(_))) => Some(v),
                 (
                     Self::Label,
                     Token::Comma
@@ -780,8 +807,8 @@ macro_rules! err {
     };
 }
 
-pub(self) use err;
-pub(self) use warning;
+use err;
+use warning;
 
 enum StatementStart {
     Label {
@@ -1250,10 +1277,9 @@ fn consume_integer<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<Token
                 of_type: GenericLiteralType::DecimalNumeric,
                 content,
             })) => {
-                res.push(Expression::NumericLiteral((
-                    NumericLiteral::Decimal(content),
-                    token.span,
-                )));
+                res.push(Expression::NumericLiteral(NumericLiteral::Decimal((
+                    content, token.span,
+                ))));
             }
             Token::Literal(LiteralToken::Ident(GenericLiteral {
                 of_type: GenericLiteralType::HexadecimalNumeric { prefix },
@@ -1269,10 +1295,9 @@ fn consume_integer<I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<Token
                 } else {
                     content = content.strip_prefix("0x").unwrap().to_string();
                 }
-                res.push(Expression::NumericLiteral((
-                    NumericLiteral::Hexadecimal(content),
-                    token.span,
-                )));
+                res.push(Expression::NumericLiteral(NumericLiteral::Hexadecimal((
+                    content, token.span,
+                ))));
             }
             Token::GroupOpening(GroupType::Paren) => {
                 let (r, w, e) = match consume_expression(source, token.span) {
@@ -1371,4 +1396,8 @@ fn consume_byte_string<
         }
     }
     StreamResult::Ok((Item::ByteString(res), errors))
+}
+
+pub struct LexerSkipper<'a, I> {
+    source: &'a mut I,
 }

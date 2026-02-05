@@ -2,10 +2,10 @@ use crate::{
     ParseErrorReport, StreamResult, StreamedError,
     lexer::{
         ErrorReports, ExtendedIdent, StreamItem, TokenizerStreamItem, auto_parser, def_yeet, err,
-        opt_consume_any_ident, skip_while_no_push,
+        opt_consume_any_ident, skip_tokens_no_push,
     },
     stream_utils::StreamPrepend,
-    tokenizer::{GroupType, Span, Token, SpanToken},
+    tokenizer::{GroupType, Span, Token},
 };
 
 pub(super) type NodeName = (String, Span);

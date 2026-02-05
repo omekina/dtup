@@ -109,7 +109,7 @@ macro_rules! try_stream {
     ($v: expr) => {
         match $v {
             StreamResult::Ok(v) => v,
-            v @ _ => return v,
+            v => return v,
         }
     };
 }

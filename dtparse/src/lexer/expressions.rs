@@ -219,10 +219,10 @@ mod binary_operation_parsing {
 
     macro_rules! token {
         (num_lit $num: literal) => {
-            Expression::NumericLiteral((
-                NumericLiteral::Hexadecimal($num.to_string()),
+            Expression::NumericLiteral(NumericLiteral::Hexadecimal((
+                $num.to_string(),
                 Span::default(),
-            ))
+            )))
         };
     }
 
@@ -898,19 +898,17 @@ pub fn consume_expression<
                 } else {
                     content = content.strip_prefix("0x").unwrap().to_string();
                 }
-                prev_expr = Some(unary!(Expression::NumericLiteral((
-                    NumericLiteral::Hexadecimal(content),
-                    token.span
-                ))));
+                prev_expr = Some(unary!(Expression::NumericLiteral(
+                    NumericLiteral::Hexadecimal((content, token.span)),
+                )));
             }
             Token::Literal(LiteralToken::Ident(GenericLiteral {
                 content,
                 of_type: GenericLiteralType::DecimalNumeric,
             })) => {
                 req_prev_expr!(none token.span);
-                prev_expr = Some(unary!(Expression::NumericLiteral((
-                    NumericLiteral::Decimal(content),
-                    token.span
+                prev_expr = Some(unary!(Expression::NumericLiteral(NumericLiteral::Decimal(
+                    (content, token.span)
                 ))));
             }
             Token::Literal(LiteralToken::String(_)) => {

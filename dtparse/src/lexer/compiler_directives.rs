@@ -1,6 +1,9 @@
 use crate::lexer::expressions::consume_label_reference;
 use crate::lexer::node::{NodeAddress, NodeName, consume_node_id};
-use crate::lexer::{Reference, deref_attribute_name, skip_possible, try_token_after};
+use crate::lexer::{
+    NumericLiteral, Reference, deref_attribute_name, skip_possible, skip_to_statement_end,
+    try_token_after,
+};
 use crate::result::{StreamResult, StreamedError};
 use crate::tokenizer::{GenericLiteralType, SpanToken};
 use crate::{
@@ -19,6 +22,7 @@ enum CompilerDirectiveType {
     Bits,
     DeleteNode,
     DeleteProperty,
+    Memreserve,
 }
 
 impl std::str::FromStr for CompilerDirectiveType {
@@ -32,6 +36,7 @@ impl std::str::FromStr for CompilerDirectiveType {
             "bits" => Ok(CompilerDirectiveType::Bits),
             "delete-node" => Ok(CompilerDirectiveType::DeleteNode),
             "delete-property" => Ok(CompilerDirectiveType::DeleteProperty),
+            "memreserve" => Ok(CompilerDirectiveType::Memreserve),
             _ => Err(()),
         }
     }
@@ -56,6 +61,11 @@ pub enum CompilerDirective {
     DeleteProperty {
         delete_property: Span,
         target: (String, Span),
+    },
+    Memreserve {
+        memreserve: Span,
+        address: NumericLiteral,
+        length: NumericLiteral,
     },
 }
 
@@ -373,6 +383,82 @@ pub fn consume_compiler_directive_arguments<
                 Some(CompilerDirective::DeleteProperty {
                     delete_property: ident_span,
                     target: (attribute_ident, attribute.1),
+                }),
+                errors,
+            ))
+        }
+        CompilerDirectiveType::Memreserve => {
+            macro_rules! req {
+                (@nonfatal_error $type: literal, $span: expr, $res_type: ident, $v: expr) => {{
+                    errors.push(err!(raw [{ InvalidNumericLiteral, [(
+                        concat!($type, " must contain a prefix").to_string(), $span.clone()
+                    )]}]));
+                    NumericLiteral::$res_type(($v, $span))
+                }};
+
+                ($type: literal, $v: expr) => {
+                    match $v.token {
+                        Token::Literal(LiteralToken::Ident(GenericLiteral {
+                            content,
+                            of_type: GenericLiteralType::HexadecimalNumeric { prefix: false },
+                        })) => req!(@nonfatal_error $type, $v.span, Hexadecimal, content),
+                        Token::Literal(LiteralToken::Ident(GenericLiteral {
+                            content,
+                            of_type: GenericLiteralType::HexadecimalNumeric { prefix: true },
+                        })) => NumericLiteral::Hexadecimal((content, $v.span)),
+                        Token::Literal(LiteralToken::Ident(GenericLiteral {
+                            content,
+                            of_type: GenericLiteralType::DecimalNumeric,
+                        })) => NumericLiteral::Decimal((content, $v.span)),
+                        _ => {
+                            errors.push(err!(raw [{ UnexpectedToken, [(
+                                concat!("expected ", $type, " here").to_string(), $v.span
+                            )]}]));
+                            skip_to_statement_end(source);
+                            return StreamResult::Ok((None, errors));
+                        }
+                    }
+                };
+            }
+            skip_possible(source);
+            let address = match try_next!() {
+                Some(v) => req!("address hexadecimal literal", v),
+                None => {
+                    errors.push(err!(raw [{ UnexpectedEof, [(
+                        "a numeric literal (an address) was expected as an argument to this",
+                        ident_span
+                    )]}]));
+                    return StreamResult::Ok((None, errors));
+                }
+            };
+            skip_possible(source);
+            let length = match try_next!() {
+                Some(v) => req!("length hexadecimal literal", v),
+                None => {
+                    errors.push(err!(raw [{ UnexpectedEof, [(
+                        "a numeric literal (a length) was expected as an argument to this",
+                        ident_span
+                    )]}]));
+                    return StreamResult::Ok((None, errors));
+                }
+            };
+            let (_, e) = yeet_value!(try_token_after(
+                source,
+                |t| matches!(t, &(Token::Whitespace(_) | Token::Comment(_))),
+                |t| matches!(t, &Token::Semicolon),
+                "expected a semicolon before eof to end this directive",
+                &ident_span,
+                "after this directive's arguments",
+                "unexpected token here, expected a semicolon",
+            ));
+            if let Some(e) = e {
+                errors.push(e);
+            }
+            StreamResult::Ok((
+                Some(CompilerDirective::Memreserve {
+                    memreserve: ident_span,
+                    address,
+                    length,
                 }),
                 errors,
             ))

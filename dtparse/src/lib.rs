@@ -51,6 +51,7 @@ impl AsRef<str> for MaybeOwnedString<'_> {
     }
 }
 
+mod base_tree;
 mod errors;
 mod file;
 mod helpers;
@@ -61,7 +62,6 @@ mod stream_utils;
 mod string;
 mod styling;
 mod tokenizer;
-mod tree_builder;
 
 pub use file::BasicFileReader;
 pub use helpers::parse;
