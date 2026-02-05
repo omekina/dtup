@@ -19,6 +19,18 @@ report!(Errors(E) {
     InvalidReference[016] => "invalid reference",
     InvalidExpression[017] => "invalid expression",
     UnknownCompilerDirective[018] => "unknown compiler directive",
+    NestedRootNode[019] => "nested root node",
+    PropertyOnRoot[020] => "property on root node",
+    DuplicitLabel[021] => "re-defined label",
+    NestedReferenceNode[022] => "nested reference node",
+    InvalidLabelTarget[023] => "invalid label target",
+    InvalidOmitTarget[024] => "invalid omit-if-no-ref target",
+    MultipleDtsHeaders[025] => "multiple `dts-v1` headers",
+    InvalidNodePlacement[026] => "invalid node placement",
+    DeletePropertyOnRoot[027] => "delete property on root",
+    ContentBeforeHeader[028] => "content before dts header",
+    NestedMemreserve[029] => "nested memreserve directive",
+    UnexpectedDtsHeader[030] => "unexpected `dts-v1` header",
 });
 
 report!(Warnings(W) {

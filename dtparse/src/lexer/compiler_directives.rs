@@ -266,9 +266,9 @@ pub fn consume_compiler_directive_arguments<
             skip_possible(source);
             match try_next!() {
                 Some(SpanToken {
-                    span,
                     token: Token::Semicolon,
-                }) => StreamResult::Ok((Some(CompilerDirective::DtsHeader(span)), errors)),
+                    ..
+                }) => StreamResult::Ok((Some(CompilerDirective::DtsHeader(ident_span)), errors)),
                 Some(SpanToken { span, token }) => {
                     source.push(StreamResult::Ok(SpanToken {
                         span: span.clone(),

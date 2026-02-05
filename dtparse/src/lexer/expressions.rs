@@ -807,19 +807,13 @@ pub fn consume_label_reference<
                     }]),
                 ]));
             };
-            StreamResult::Ok(Reference::NodePath(path, addr))
+            StreamResult::Ok(Reference::NodePath(path, addr, ampersand))
         }
         Token::Literal(LiteralToken::Ident(GenericLiteral {
             content,
-            of_type: GenericLiteralType::Ident,
+            ..
         })) => {
-            return StreamResult::Ok(Reference::Label(content, next.span));
-        }
-        Token::Literal(LiteralToken::Ident(_)) => {
-            return err!(cont_multi [{ InvalidReference, [
-                ("this is not a valid label identifier", next.span),
-                ("expected a label identifier after this", ampersand),
-            ]}]);
+            return StreamResult::Ok(Reference::Label(content, next.span, ampersand));
         }
         _ => {
             source.push(StreamResult::Ok(next));

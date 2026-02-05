@@ -1,14 +1,15 @@
 use crate::{
-    lexer::{Lexer, LexerToken},
+    base_tree::{IgnorantIncluder, RootScope, preprocess_tree},
+    lexer::Lexer,
     pointer_stream::{PointerTracker, RawPointerTracker},
-    result::{IoError, ParseErrorReport, StreamResult, StreamedError},
+    result::{IoError, ParseErrorReport, StreamResult},
     stream_utils::PrependableStream,
     string::StringDecoder,
     tokenizer::{ErrorSkipper, SpanToken, Tokenizer},
 };
 use std::{fs::File, io::Read, path::Path};
 
-pub fn parse(filepath: &Path) -> StreamResult<(Vec<LexerToken>, Vec<ParseErrorReport>), ()> {
+pub fn parse(filepath: &Path) -> StreamResult<(Option<RootScope>, Vec<ParseErrorReport>), ()> {
     let file = match File::open(filepath) {
         Ok(v) => v,
         Err(e) => return StreamResult::IoError(e.into()),
@@ -23,26 +24,17 @@ pub fn parse(filepath: &Path) -> StreamResult<(Vec<LexerToken>, Vec<ParseErrorRe
     let mut error_skipper = ErrorSkipper::new(&mut tokenizer);
     let mut prependable_stream: PrependableStream<StreamResult<SpanToken, ParseErrorReport>, _, 1> =
         PrependableStream::new(&mut error_skipper);
-    let mut lexed = Vec::new();
-    let mut reports = Vec::new();
-    for v in Lexer::new(&mut prependable_stream) {
-        match v {
-            StreamResult::Ok(v) => {
-                if let Some(r) = v.reports {
-                    reports.extend(r.into_iter());
-                }
-                lexed.push(v.token);
-            }
-            StreamResult::IoError(e) => return StreamResult::IoError(e),
-            StreamResult::ProcessingError(StreamedError::ShouldEnd(e)) => {
-                reports.extend(e.into_iter());
-                break;
-            }
-            StreamResult::ProcessingError(StreamedError::CanContinue(e)) => {
-                reports.extend(e.into_iter())
-            }
+    let mut lexer = Lexer::new(&mut prependable_stream);
+    let (res, _, errors) = match preprocess_tree(
+        &mut lexer,
+        filepath.extension().map(|v| v == "dtsi").unwrap_or(false),
+        &mut IgnorantIncluder,
+    ) {
+        StreamResult::Ok(v) => v,
+        StreamResult::IoError(e) => return StreamResult::IoError(e),
+        StreamResult::ProcessingError(e) => {
+            return StreamResult::Ok((None, e));
         }
-    }
-    reports.extend(error_skipper.take_errors());
-    StreamResult::Ok((lexed, reports))
+    };
+    StreamResult::Ok((Some(res), errors))
 }

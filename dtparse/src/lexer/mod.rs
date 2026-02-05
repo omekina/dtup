@@ -53,9 +53,6 @@ pub enum LexerToken {
         closing_delimiter: Span,
     },
     Statement(Statement),
-    StatementEnd {
-        span: Span,
-    },
 }
 
 #[derive(Debug)]
@@ -172,10 +169,19 @@ pub enum Item {
 type NodePathPortion = (String, Span);
 type NodeAddress = String;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Reference {
-    Label(String, Span),
-    NodePath(Vec<NodePathPortion>, Option<(NodeAddress, Span)>),
+    Label(String, Span, Span),
+    NodePath(Vec<NodePathPortion>, Option<(NodeAddress, Span)>, Span),
+}
+
+impl Reference {
+    pub(crate) fn ampersand(&self) -> &Span {
+        match self {
+            Self::Label(_, _, span) => span,
+            Self::NodePath(_, _, span) => span,
+        }
+    }
 }
 
 pub struct Lexer<'a, I> {
@@ -807,8 +813,8 @@ macro_rules! err {
     };
 }
 
-use err;
-use warning;
+pub(crate) use err;
+pub(crate) use warning;
 
 enum StatementStart {
     Label {
