@@ -712,8 +712,11 @@ macro_rules! warning {
     };
 
     (@message ($message: expr, $span: expr)) => {
-        Box::new(PrimitiveReportMessage::warning(warning!(@msg $message), $span.span, $span.ptr))
-            as Box<dyn ReportInlineMessage>
+        Box::new(
+            crate::report::PrimitiveReportMessage::warning(
+                warning!(@msg $message), $span.span, $span.ptr
+            )
+        ) as Box<dyn crate::report::ReportInlineMessage>
     };
 
     (@messages [$($message: tt),*]) => {
@@ -721,18 +724,19 @@ macro_rules! warning {
     };
 
     (@segment $warning_type: ident, [$($message: tt),*]) => {
-        Box::new(PrimitiveReportSegment::new(
-            Some(PrimitiveMainMessage::warning(
-                Warnings::$warning_type.message(), Warnings::$warning_type.id(),
+        Box::new(crate::report::PrimitiveReportSegment::new(
+            Some(crate::report::PrimitiveMainMessage::warning(
+                crate::errors::Warnings::$warning_type.message(),
+                crate::errors::Warnings::$warning_type.id(),
             )),
             warning!(@messages [$($message),*]),
         ))
     };
 
     (@report $({ $warning_type: ident, [$($message: tt),*$(,)?] }),*$(,)?) => {
-        Box::new(PrimitiveReport::new(
+        Box::new(crate::report::PrimitiveReport::new(
             vec![$(warning!(@segment $warning_type, [$($message),*])),*]
-        )) as ParseErrorReport
+        )) as crate::result::ParseErrorReport
     };
 
     ($($t: tt)*) => {

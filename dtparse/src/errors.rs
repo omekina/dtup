@@ -36,4 +36,5 @@ report!(Errors(E) {
 report!(Warnings(W) {
     WeirdPropertyName[001] => "weird property name",
     UnenclosedNestedExpression[002] => "unenclosed nested expression",
+    DtsHeaderInIncludeFile[003] => "`/dts-v1/` header in a dtsi file",
 });

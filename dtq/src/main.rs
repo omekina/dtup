@@ -18,11 +18,14 @@ fn main() {
     let args = Args::parse();
 
     let mut stdout = BufWriter::new(stdout());
+    let start_time = std::time::Instant::now();
     let (tokens, reports) = match parse(&args.input_file) {
         StreamResult::Ok(v) => v,
         StreamResult::IoError(e) => panic!("io error: {e:?}"),
         StreamResult::ProcessingError(()) => panic!(),
     };
+    let execution_time = start_time.elapsed();
+    println!("compilation took {:?}", execution_time);
     for report in reports {
         write_report(report, &mut stdout);
         stdout.write_all(b"\n").unwrap();

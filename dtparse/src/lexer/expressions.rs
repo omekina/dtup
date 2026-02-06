@@ -809,10 +809,7 @@ pub fn consume_label_reference<
             };
             StreamResult::Ok(Reference::NodePath(path, addr, ampersand))
         }
-        Token::Literal(LiteralToken::Ident(GenericLiteral {
-            content,
-            ..
-        })) => {
+        Token::Literal(LiteralToken::Ident(GenericLiteral { content, .. })) => {
             return StreamResult::Ok(Reference::Label(content, next.span, ampersand));
         }
         _ => {

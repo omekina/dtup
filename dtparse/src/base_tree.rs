@@ -3,8 +3,9 @@ use crate::{
     lexer::{
         Item, LexerItem, LexerToken, NumericLiteral, Reference, Statement,
         compiler_directives::{CompilerDirective, NodeTarget},
-        err,
+        err, warning,
     },
+    stream_utils::StreamPrepend,
     tokenizer::Span,
 };
 use std::collections::HashMap;
@@ -299,6 +300,10 @@ impl ErrorTracker {
         self.prevent_compilation = true;
     }
 
+    fn push(&mut self, value: ParseErrorReport) {
+        self.errors.push(value);
+    }
+
     fn extend(&mut self, value: Errors) {
         self.errors.extend(value);
     }
@@ -334,9 +339,8 @@ impl IncludeRegistry for IgnorantIncluder {
     }
 }
 
-pub(crate) fn preprocess_tree<
-    I: Iterator<Item = StreamResult<LexerItem, StreamedError<Vec<ParseErrorReport>>>>,
->(
+type LexerOutput = StreamResult<LexerItem, StreamedError<Vec<ParseErrorReport>>>;
+pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<LexerOutput>>(
     source: &mut I,
     include_file: bool,
     includer: &mut impl IncludeRegistry,
@@ -367,7 +371,7 @@ pub(crate) fn preprocess_tree<
     }
 
     // get dts header
-    if !include_file {
+    {
         let mut had_before = false;
         loop {
             let Some(token) = source.next() else {
@@ -386,13 +390,24 @@ pub(crate) fn preprocess_tree<
                 LexerToken::CompilerDirective(CompilerDirective::DtsHeader(span)) => {
                     if had_before {
                         e!(ContentBeforeHeader [
-                            ("nothing can appear before this header", span),
+                            ("nothing can appear before this header", span.clone()),
                         ]);
+                    }
+                    if include_file {
+                        errors.push(warning!({ DtsHeaderInIncludeFile, [
+                            ("this should not appear in a dtsi file", span),
+                        ]}));
                     }
                     break;
                 }
+                LexerToken::Newline => {}
                 _ => {
                     if include_file {
+                        source.push(StreamResult::Ok(LexerItem {
+                            token,
+                            reports: None,
+                            prevent_compilation,
+                        }));
                         break;
                     }
                     had_before = true
@@ -415,7 +430,7 @@ pub(crate) fn preprocess_tree<
             LexerToken::CompilerDirective(CompilerDirective::DtsHeader(span)) => {
                 if include_file {
                     e!(ContentBeforeHeader [
-                        ("dts headers must appear at the beggining of include files", span),
+                        ("dts headers must only appear at the beggining of include files", span),
                     ]);
                 } else {
                     e!(MultipleDtsHeaders [

@@ -16,6 +16,67 @@ pub(crate) trait PrependablePointer {
     fn last_ptr(&self) -> Pos;
 }
 
+pub(crate) struct StackSingleItemPrependableStream<'a, T, I> {
+    source: &'a mut I,
+    backlog: Option<T>,
+    has_ended: bool,
+}
+
+impl<'a, T, I> StackSingleItemPrependableStream<'a, T, I> {
+    pub(crate) fn new(source: &'a mut I) -> Self {
+        Self {
+            source,
+            backlog: Default::default(),
+            has_ended: false,
+        }
+    }
+}
+
+impl<T, I> StreamPrepend<T> for StackSingleItemPrependableStream<'_, T, I> {
+    fn push(&mut self, value: T) {
+        if self.backlog.is_some() {
+            panic!("tried to push to a full backlog");
+        }
+        self.backlog = Some(value);
+    }
+}
+
+impl<T, I> StackSingleItemPrependableStream<'_, T, I>
+where
+    I: Iterator<Item = T>,
+{
+    fn get_from_source(&mut self) -> Option<T> {
+        if self.has_ended {
+            return None;
+        }
+        let next = self.source.next();
+        if next.is_none() {
+            self.has_ended = true;
+        }
+        next
+    }
+}
+
+impl<T, I: Iterator<Item = T>> Iterator for StackSingleItemPrependableStream<'_, T, I> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.backlog.take() {
+            v @ Some(_) => v,
+            None => self.get_from_source(),
+        }
+    }
+}
+
+impl<T, I: PointerStream> PrependablePointer for StackSingleItemPrependableStream<'_, T, I> {
+    fn last_ptr(&self) -> Pos {
+        if self.backlog.is_some() {
+            panic!("ptr getter called on a stream with non-empty backlog");
+        }
+        self.source.prev_ptr()
+    }
+}
+
 pub(crate) struct PrependableStream<T, I, const BACKLOG_SIZE: usize> {
     source: I,
     backlog: Vec<T>,
@@ -43,7 +104,7 @@ impl<T, I, const BACKLOG_SIZE: usize> PrependableStream<T, I, BACKLOG_SIZE>
 where
     I: Iterator<Item = T>,
 {
-    /// Awoids re-polling the source if it has already ended
+    /// Avoids re-polling the source if it has already ended
     fn get_from_source(&mut self) -> Option<T> {
         if self.has_ended {
             return None;
