@@ -12,15 +12,15 @@ use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct RootScope {
-    includes: Vec<(String, Span)>,
-    nodes: Vec<Node>,
-    root_delete_nodes: Vec<(NodeId, Span)>,
-    root_node_properties: Vec<Property>,
-    root_node_delete_properties: Vec<(String, Span)>,
-    root_node_delete_nodes: Vec<(NodeId, Span)>,
-    root_node_property_labels: HashMap<String, (String, Span)>,
-    memory_reservations: Vec<MemoryReservation>,
-    labels: HashMap<String, (LabelTarget, Span)>,
+    pub includes: Vec<(String, Span)>,
+    pub nodes: Vec<Node>,
+    pub root_delete_nodes: Vec<(NodeId, Span)>,
+    pub root_node_properties: Vec<Property>,
+    pub root_node_delete_properties: Vec<(String, Span)>,
+    pub root_node_delete_nodes: Vec<(NodeId, Span)>,
+    pub root_node_property_labels: HashMap<String, (String, Span)>,
+    pub memory_reservations: Vec<MemoryReservation>,
+    pub labels: HashMap<String, (LabelTarget, Span)>,
 }
 
 impl RootScope {
@@ -57,18 +57,18 @@ pub enum RootScopeNodeId {
 
 #[derive(Debug)]
 pub struct Node {
-    id: NodeId,
-    scope: NodeScope,
-    omit_if_no_ref: bool,
+    pub id: NodeId,
+    pub scope: NodeScope,
+    pub omit_if_no_ref: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct NodeScope {
-    properties: Vec<Property>,
-    includes: Vec<(String, Span)>,
-    nodes: Vec<Node>,
-    delete_properties: Vec<(String, Span)>,
-    delete_nodes: Vec<(NodeId, Span)>,
+    pub properties: Vec<Property>,
+    pub includes: Vec<(String, Span)>,
+    pub nodes: Vec<Node>,
+    pub delete_properties: Vec<(String, Span)>,
+    pub delete_nodes: Vec<(NodeId, Span)>,
 }
 
 #[derive(Debug)]
@@ -368,7 +368,7 @@ impl IncludeRegistry for IgnorantIncluder {
 }
 
 type LexerOutput = StreamResult<LexerItem, StreamedError<Vec<ParseErrorReport>>>;
-pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<LexerOutput>>(
+pub fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<LexerOutput>>(
     source: &mut I,
     include_file: bool,
     includer: &mut impl IncludeRegistry,
