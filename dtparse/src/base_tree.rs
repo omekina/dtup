@@ -18,7 +18,35 @@ pub struct RootScope {
     root_node_properties: Vec<Property>,
     root_node_delete_properties: Vec<(String, Span)>,
     root_node_delete_nodes: Vec<(NodeId, Span)>,
+    root_node_property_labels: HashMap<String, (String, Span)>,
     memory_reservations: Vec<MemoryReservation>,
+    labels: HashMap<String, (LabelTarget, Span)>,
+}
+
+impl RootScope {
+    fn define_labels(&mut self, labels: Vec<(String, Span)>, target: String) -> Errors {
+        let mut res = Vec::new();
+        for label in labels {
+            if let Some(e) = self.define_label(label, target.clone()) {
+                res.push(e);
+            }
+        }
+        res
+    }
+
+    fn define_label(&mut self, label: (String, Span), target: String) -> Option<ParseErrorReport> {
+        let (label, span) = label;
+        match self.root_node_property_labels.get(&label) {
+            Some(v) => Some(err!(raw [{ DuplicitLabel, [
+                ("this is the original definition", v.1.clone()),
+                ("this is a re-definition", span),
+            ]}])),
+            None => {
+                self.root_node_property_labels.insert(label, (target, span));
+                None
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -270,18 +298,18 @@ impl TreeStack {
             .push(include);
     }
 
-    fn finish(mut self) -> (Option<Node>, Errors) {
+    fn finish(mut self) -> (Option<Node>, HashMap<String, (LabelTarget, Span)>, Errors) {
         let mut errors = Vec::new();
         while let Some(popped) = self.stack.pop() {
             errors.push(err!(raw [{ UnmatchedDelimiter, [
                 ("this node remains unclosed", popped.1),
             ]}]));
             let Some(parent) = self.stack.last_mut() else {
-                return (Some(popped.0), errors);
+                return (Some(popped.0), self.labels, errors);
             };
             parent.0.scope.nodes.push(popped.0);
         }
-        (None, errors)
+        (None, self.labels, errors)
     }
 }
 
@@ -415,9 +443,19 @@ pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<Le
             }
         }
     }
-
     let mut prepend_labels: Vec<(String, Span)> = Vec::new();
     let mut omit_if_no_ref: Option<Span> = None;
+
+    macro_rules! req_no_omit {
+        () => {
+            if let Some(omit) = omit_if_no_ref.take() {
+                e!(InvalidOmitTarget [
+                    ("a node must follow after this", omit),
+                ]);
+            }
+        };
+    }
+
     while let Some(token) = source.next() {
         let LexerItem {
             token,
@@ -440,6 +478,7 @@ pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<Le
             }
 
             LexerToken::CompilerDirective(CompilerDirective::Include { target, .. }) => {
+                req_no_omit!();
                 includer.register(target.clone());
                 if stack.has_nested() {
                     stack.include(target);
@@ -449,6 +488,7 @@ pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<Le
             }
 
             LexerToken::CompilerDirective(CompilerDirective::Bits { bits, .. }) => {
+                req_no_omit!();
                 e!(UnknownCompilerDirective [
                     ("this must only appear before items in property values", bits),
                 ]);
@@ -473,6 +513,7 @@ pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<Le
                 delete_property,
                 target,
             }) => {
+                req_no_omit!();
                 if stack.has_nested() {
                     stack.delete_property(target.0, delete_property);
                 } else if !root_openings.is_empty() {
@@ -489,6 +530,7 @@ pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<Le
                 address,
                 length,
             }) => {
+                req_no_omit!();
                 if !root_openings.is_empty() {
                     e!(NestedMemreserve [
                         ("this must only appear at top level", memreserve),
@@ -580,6 +622,7 @@ pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<Le
             }
 
             LexerToken::NodeEnd { closing_delimiter } => {
+                req_no_omit!();
                 if stack.has_nested() {
                     if let Some(node) = stack.end_node() {
                         scope.nodes.push(node);
@@ -594,6 +637,7 @@ pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<Le
             }
 
             LexerToken::Statement(stmt) => {
+                req_no_omit!();
                 let stmt = match stmt {
                     Statement::FlagProperty { property_name } => Property {
                         name: property_name,
@@ -612,8 +656,18 @@ pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<Le
                     let e = stack.push_property(stmt, std::mem::take(&mut prepend_labels));
                     errors.extend_fatal(e);
                 } else if !root_openings.is_empty() {
+                    let label_target = if !prepend_labels.is_empty() {
+                        Some(stmt.name.clone().0)
+                    } else {
+                        None
+                    };
                     scope.root_node_properties.push(stmt);
-                    todo!("prepend labels");
+                    if !prepend_labels.is_empty() {
+                        let label_target = label_target.unwrap();
+                        errors.extend_fatal(
+                            scope.define_labels(std::mem::take(&mut prepend_labels), label_target),
+                        );
+                    }
                 }
             }
 
@@ -635,6 +689,12 @@ pub(crate) fn preprocess_tree<I: Iterator<Item = LexerOutput> + StreamPrepend<Le
         errors.push_fatal(err!(raw [{ UnmatchedDelimiter, [
             ("this root node remains unclosed", opening),
         ]}]));
+    }
+    let (last_node, labels, e) = stack.finish();
+    scope.labels = labels;
+    errors.extend_fatal(e);
+    if let Some(last_node) = last_node {
+        scope.nodes.push(last_node);
     }
     StreamResult::Ok((scope, errors.has_compilation_aborted(), errors.take()))
 }
