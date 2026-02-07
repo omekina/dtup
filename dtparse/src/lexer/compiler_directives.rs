@@ -91,6 +91,15 @@ pub enum NodeTarget {
     Reference(Reference),
 }
 
+impl NodeTarget {
+    pub fn start_span(&self) -> &Span {
+        match self {
+            Self::Node((name, _)) => &name.1,
+            Self::Reference(reference) => reference.ampersand(),
+        }
+    }
+}
+
 pub fn consume_compiler_directive_or_root_node<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(

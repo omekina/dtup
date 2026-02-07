@@ -20,12 +20,10 @@ report!(Errors(E) {
     InvalidExpression[017] => "invalid expression",
     UnknownCompilerDirective[018] => "unknown compiler directive",
     NestedRootNode[019] => "nested root node",
-    PropertyOnRoot[020] => "property on root node",
     DuplicitLabel[021] => "re-defined label",
     NestedReferenceNode[022] => "nested reference node",
     InvalidLabelTarget[023] => "invalid label target",
     InvalidOmitTarget[024] => "invalid omit-if-no-ref target",
-    MultipleDtsHeaders[025] => "multiple `dts-v1` headers",
     InvalidNodePlacement[026] => "invalid node placement",
     DeletePropertyOnRoot[027] => "delete property on root",
     ContentBeforeHeader[028] => "content before dts header",
@@ -36,6 +34,8 @@ report!(Errors(E) {
     DeleteInSameScope[033] => "delete in the same scope",
     ChainedOmits[034] => "chained `omit-if-no-ref` directives",
     NestedReferencedNodeDelete[035] => "nested node delete with a reference",
+    StandardNodeOutsideScope[036] => "standard node outside scope",
+    PropertyOutsideScope[037] => "property outside scope",
 });
 
 report!(Warnings(W) {
@@ -43,4 +43,5 @@ report!(Warnings(W) {
     UnenclosedNestedExpression[002] => "unenclosed nested expression",
     DtsHeaderInIncludeFile[003] => "`/dts-v1/` header in a dtsi file",
     ChainedLabels[004] => "chained labels",
+    MultipleDtsHeaders[005] => "multiple `dts-v1` headers",
 });

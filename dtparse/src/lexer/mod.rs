@@ -55,6 +55,26 @@ pub enum LexerToken {
     Statement(Statement),
 }
 
+impl LexerToken {
+    /// # Panics
+    /// Will panic if the token is `Newline` or `Invalid`
+    pub fn start_span(&self) -> &Span {
+        match self {
+            Self::Invalid | Self::Newline => panic!(),
+            Self::CompilerDirective(directive) => directive.ident_span(),
+            Self::Label { name, .. } => &name.1,
+            Self::RootNodeStart { slash, .. } => slash,
+            Self::RefNodeStart { reference, .. } => reference.ampersand(),
+            Self::NodeStart { name, .. } => &name.1,
+            Self::NodeEnd { closing_delimiter } => closing_delimiter,
+            Self::Statement(Statement::FlagProperty { property_name }) => &property_name.1,
+            Self::Statement(Statement::PropertyAssignment { property_name, .. }) => {
+                &property_name.1
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Statement {
     PropertyAssignment {

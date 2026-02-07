@@ -1,7 +1,7 @@
 use crate::{
     Item, ParseErrorReport, Reference, Span, StreamResult, StreamedError,
     lexer::{
-        LexerItem, LexerToken, Statement,
+        LexerItem, LexerToken, NumericLiteral, Statement,
         compiler_directives::{CompilerDirective, NodeTarget},
         err, warning,
     },
@@ -74,6 +74,15 @@ pub enum DeleteNodeTarget {
     Reference(Reference),
 }
 
+impl From<crate::lexer::compiler_directives::NodeTarget> for DeleteNodeTarget {
+    fn from(value: crate::lexer::compiler_directives::NodeTarget) -> Self {
+        match value {
+            crate::lexer::compiler_directives::NodeTarget::Reference(v) => Self::Reference(v),
+            crate::lexer::compiler_directives::NodeTarget::Node(v) => Self::Direct(v),
+        }
+    }
+}
+
 type Label = SpanString;
 type LabelIndex = HashMap<String, (LabelTarget, Span)>;
 
@@ -83,6 +92,10 @@ pub enum RootItem {
     RootNode(RootNode),
     RefNode(RefNode),
     DeleteNode(DeleteNodeTarget),
+    Memreserve {
+        address: NumericLiteral,
+        length: NumericLiteral,
+    },
 }
 
 type LexerOutput = StreamResult<LexerItem, StreamedError<Vec<ParseErrorReport>>>;
@@ -551,27 +564,7 @@ macro_rules! def_err {
     };
 }
 
-impl<I: Iterator<Item = LexerOutput> + StreamPrepend<LexerOutput>> ScopeBuilder<'_, I> {
-    fn dts_header(&mut self, span: Span) -> Option<Report> {
-        if let Some(ref first) = self.dts_header {
-            return Some(err!(raw [{ MultipleDtsHeaders, [
-                ("this was the first dts header", first.clone()),
-                ("a file can't have multiple dts headers", span),
-            ]}]));
-        }
-        if self.has_content {
-            return Some(err!(raw [{ ContentBeforeHeader, [
-                ("this header must appear at the start of the file", span),
-            ]}]));
-        }
-        if self.is_include_file {
-            return Some(warning!({ DtsHeaderInIncludeFile, [
-                ("includes files should not have dts headers", span),
-            ]}));
-        }
-        None
-    }
-
+impl<I: Iterator<Item = LexerOutput>> ScopeBuilder<'_, I> {
     /// # Returns
     /// Whether the outer loop should continue (`true`), or the main node was ended and the outer
     /// loop should quit (`false`).
@@ -586,10 +579,7 @@ impl<I: Iterator<Item = LexerOutput> + StreamPrepend<LexerOutput>> ScopeBuilder<
         match token {
             LexerToken::Invalid | LexerToken::Newline => true,
 
-            LexerToken::CompilerDirective(CompilerDirective::DeleteProperty {
-                target,
-                ..
-            }) => {
+            LexerToken::CompilerDirective(CompilerDirective::DeleteProperty { target, .. }) => {
                 result_builder.extend_fatal(std::mem::take(prefixer).other());
                 result_builder.push_opt_fatal(stack.delete_property(target));
                 true
@@ -654,9 +644,7 @@ impl<I: Iterator<Item = LexerOutput> + StreamPrepend<LexerOutput>> ScopeBuilder<
             }
 
             LexerToken::NodeStart {
-                name,
-                unit_address,
-                ..
+                name, unit_address, ..
             } => {
                 let (labels, omit) = std::mem::take(prefixer).node();
                 result_builder.extend_fatal(stack.add_node((name, unit_address), omit, labels));
@@ -718,8 +706,8 @@ impl<I: Iterator<Item = LexerOutput> + StreamPrepend<LexerOutput>> ScopeBuilder<
         target: Reference,
         opening: Span,
         this_node_labels: Vec<Label>,
+        mut result_builder: ParsingResultBuilder,
     ) -> StreamResult<ParsingResult<RootItem>, Reports> {
-        let mut result_builder = ParsingResultBuilder::default();
         let (_, scope, labels) =
             yeet_value!(self.node(target.ampersand().clone(), opening, &mut result_builder));
         StreamResult::Ok(result_builder.finish(RootItem::RefNode(RefNode {
@@ -734,19 +722,162 @@ impl<I: Iterator<Item = LexerOutput> + StreamPrepend<LexerOutput>> ScopeBuilder<
         &mut self,
         name: Span,
         opening: Span,
+        mut result_builder: ParsingResultBuilder,
     ) -> StreamResult<ParsingResult<RootItem>, Reports> {
-        let mut result_builder = ParsingResultBuilder::default();
         let (def, scope, labels) = yeet_value!(self.node(name, opening, &mut result_builder));
         StreamResult::Ok(result_builder.finish(RootItem::RootNode(RootNode { def, scope, labels })))
     }
+
+    fn header(&mut self, span: Span, result_builder: &mut ParsingResultBuilder) {
+        def_err!(result_builder);
+        if self.has_content {
+            e!(ContentBeforeHeader [
+                ("this header must be at the beginning of the file", span.clone()),
+            ]);
+        }
+        if let Some(ref first) = self.dts_header {
+            result_builder.push_nonfatal(warning!({ MultipleDtsHeaders, [
+                ("this is the first dts header", first.clone()),
+                ("this header is duplicit", span.clone()),
+            ]}));
+        }
+        if self.is_include_file {
+            result_builder.push_nonfatal(warning!({ DtsHeaderInIncludeFile, [
+                ("dts headers should not appear in include files", span.clone()),
+            ]}));
+        }
+        self.dts_header = Some(span);
+    }
 }
 
-impl<I: Iterator<Item = LexerOutput> + StreamPrepend<LexerOutput>> Iterator
+impl<I: Iterator<Item = LexerOutput>> Iterator
     for ScopeBuilder<'_, I>
 {
     type Item = StreamResult<ParsingResult<RootItem>, Reports>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!();
+        let mut result_builder = ParsingResultBuilder::default();
+        def_next!(option self.source, result_builder);
+        def_err!(result_builder);
+        let mut labels: Vec<Label> = Vec::new();
+        macro_rules! req_no_label {
+            () => {
+                if let Some(last) = labels.pop() {
+                    e!(InvalidLabelTarget [
+                        ("expected a reference node after this label", last.1),
+                    ]);
+                }
+                labels.clear();
+            };
+        }
+        while let Some(token) = next!() {
+            result_builder.extend_nonfatal(token.reports.unwrap_or_default());
+            if token.prevent_compilation {
+                result_builder.prevent_compilation();
+            }
+            match token.token {
+                LexerToken::Invalid | LexerToken::Newline => {}
+
+                LexerToken::CompilerDirective(CompilerDirective::DtsHeader(span)) => {
+                    self.header(span, &mut result_builder);
+                }
+
+                LexerToken::CompilerDirective(CompilerDirective::Include { target, .. }) => {
+                    req_no_label!();
+                    return Some(StreamResult::Ok(
+                        result_builder.finish(RootItem::Include(target)),
+                    ));
+                }
+
+                LexerToken::CompilerDirective(CompilerDirective::DeleteNode { target, .. }) => {
+                    req_no_label!();
+                    return Some(StreamResult::Ok(
+                        result_builder.finish(RootItem::DeleteNode(target.into())),
+                    ));
+                }
+
+                LexerToken::CompilerDirective(CompilerDirective::Memreserve {
+                    address,
+                    length,
+                    ..
+                }) => {
+                    req_no_label!();
+                    return Some(StreamResult::Ok(
+                        result_builder.finish(RootItem::Memreserve { address, length }),
+                    ));
+                }
+
+                LexerToken::CompilerDirective(directive) => {
+                    e!(UnknownCompilerDirective [
+                        ("this directive must be in a scope", directive.ident_span().clone()),
+                    ]);
+                }
+
+                LexerToken::Label { name, .. } => {
+                    if let Some(last) = labels.last() {
+                        result_builder.push_nonfatal(warning!({ ChainedLabels, [
+                            ("this is a previous label", last.1.clone()),
+                            ("labels shouldn't be chained", name.1.clone()),
+                        ]}));
+                    }
+                    labels.push(name);
+                }
+
+                LexerToken::RootNodeStart {
+                    slash,
+                    opening_delimiter,
+                } => {
+                    if let Some(last) = labels.pop() {
+                        e!(InvalidLabelTarget [
+                            ("labels can't appear on root nodes", last.1),
+                            ("this is a root node", slash.clone()),
+                        ]);
+                    }
+                    labels.clear();
+                    return Some(self.root_node(slash, opening_delimiter, result_builder));
+                }
+
+                LexerToken::RefNodeStart {
+                    reference,
+                    opening_delimiter,
+                } => {
+                    return Some(self.ref_node(
+                        reference,
+                        opening_delimiter,
+                        labels,
+                        result_builder,
+                    ));
+                }
+
+                LexerToken::NodeStart { name, .. } => {
+                    e!(StandardNodeOutsideScope [
+                        (
+                            "standard nodes (like this one) can't appear outside a scope, perhaps \
+                            wrap this in a root node (`/`)?",
+                            name.1
+                        ),
+                    ]);
+                }
+
+                LexerToken::Statement(
+                    Statement::FlagProperty { property_name }
+                    | Statement::PropertyAssignment { property_name, .. },
+                ) => {
+                    e!(PropertyOutsideScope[(
+                        "properties (like this one) can't appear outside a scope, perhaps \
+                            wrap this in a root node (`/`)?",
+                        property_name.1
+                    )]);
+                }
+
+                LexerToken::NodeEnd { closing_delimiter } => {
+                    e!(UnmatchedDelimiter [
+                        ("this closing has no matching opening", closing_delimiter),
+                    ]);
+                }
+            }
+        }
+        req_no_label!();
+        None
     }
 }

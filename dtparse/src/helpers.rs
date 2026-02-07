@@ -2,13 +2,14 @@ use crate::{
     lexer::Lexer,
     pointer_stream::{PointerTracker, RawPointerTracker},
     result::{IoError, ParseErrorReport, StreamResult},
+    scopes::{ParsingResult, RootItem, ScopeBuilder},
     stream_utils::StackSingleItemPrependableStream,
     string::StringDecoder,
     tokenizer::{ErrorSkipper, Tokenizer},
 };
 use std::{fs::File, io::Read, path::Path};
 
-pub fn parse(filepath: &Path) -> StreamResult<(Option<RootScope>, Vec<ParseErrorReport>), ()> {
+pub fn parse(filepath: &Path) -> StreamResult<(Vec<RootItem>, Vec<ParseErrorReport>), ()> {
     let file = match File::open(filepath) {
         Ok(v) => v,
         Err(e) => return StreamResult::IoError(e.into()),
@@ -25,17 +26,31 @@ pub fn parse(filepath: &Path) -> StreamResult<(Option<RootScope>, Vec<ParseError
     let mut error_skipper = ErrorSkipper::new(&mut tokenizer);
     let mut prependable_stream = StackSingleItemPrependableStream::new(&mut error_skipper);
     let mut lexer = Lexer::new(&mut prependable_stream);
-    let mut prependable_stream = StackSingleItemPrependableStream::new(&mut lexer);
-    let (res, _, errors) = match preprocess_tree(
-        &mut prependable_stream,
+    let scope_builder = ScopeBuilder::new(
+        &mut lexer,
         filepath.extension().map(|v| v == "dtsi").unwrap_or(false),
-        &mut IgnorantIncluder,
-    ) {
-        StreamResult::Ok(v) => v,
-        StreamResult::IoError(e) => return StreamResult::IoError(e),
-        StreamResult::ProcessingError(e) => {
-            return StreamResult::Ok((None, e));
+    );
+    let mut scopes = Vec::new();
+    let mut reports = Vec::new();
+    for scope in scope_builder {
+        let res = match scope {
+            StreamResult::Ok(v) => v,
+            StreamResult::IoError(e) => return StreamResult::IoError(e),
+            StreamResult::ProcessingError(e) => {
+                reports.extend(e);
+                break;
+            },
+        };
+        match res {
+            ParsingResult::AllowCompilation(res, e) => {
+                reports.extend(e);
+                scopes.push(res);
+            }
+            ParsingResult::AbortCompilation(res, e) => {
+                reports.extend(e);
+                scopes.push(res);
+            }
         }
-    };
-    StreamResult::Ok((Some(res), errors))
+    }
+    StreamResult::Ok((scopes, reports))
 }

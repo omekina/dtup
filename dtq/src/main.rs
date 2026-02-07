@@ -25,11 +25,11 @@ fn main() {
         StreamResult::ProcessingError(()) => panic!(),
     };
     let execution_time = start_time.elapsed();
-    println!("compilation took {:?}", execution_time);
     for report in reports {
         write_report(report, &mut stdout);
         stdout.write_all(b"\n").unwrap();
     }
     stdout.flush().unwrap();
+    println!("compilation took {:?}", execution_time);
     println!("{:?}", tokens);
 }

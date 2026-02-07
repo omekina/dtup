@@ -231,6 +231,7 @@ pub enum GenericLiteralType {
     Ident,
 }
 
+// TODO: Negative numerics
 impl GenericLiteral {
     /// # Panics
     /// If the char is unknown
