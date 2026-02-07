@@ -1,5 +1,4 @@
 use crate::{
-    base_tree::{IgnorantIncluder, RootScope, preprocess_tree},
     lexer::Lexer,
     pointer_stream::{PointerTracker, RawPointerTracker},
     result::{IoError, ParseErrorReport, StreamResult},

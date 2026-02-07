@@ -73,14 +73,14 @@ fn consume_node_path_part<
     I: Iterator<Item = TokenizerStreamItem> + StreamPrepend<TokenizerStreamItem>,
 >(
     source: &mut I,
-    path: &mut Vec<(String, Span)>,
+    path: &mut Vec<((String, Span), Option<(String, Span)>)>,
     errors: &mut ErrorReports,
 ) -> StreamItem<bool> {
     def_yeet!();
-    match yeet_value!(consume_node_name(source)) {
-        Ok((v, e)) => {
+    match yeet_value!(consume_node_id(source)) {
+        Ok((id, addr, e)) => {
             errors.extend(e);
-            path.push(v);
+            path.push((id, addr));
             StreamResult::Ok(true)
         }
         Err(Some(e)) => {
@@ -94,7 +94,7 @@ fn consume_node_path_part<
 }
 
 auto_parser!(skip_tokens_no_push skip_to_node_path_end, |t| {
-    !matches!(t, &Token::Semicolon)
+    !matches!(t, &Token::GroupClosing(GroupType::Brace))
 });
 
 pub(super) fn consume_node_path<
@@ -102,18 +102,21 @@ pub(super) fn consume_node_path<
 >(
     source: &mut I,
     opening_brace: &Span,
-) -> StreamItem<(Option<(Vec<(String, Span)>, NodeAddress)>, ErrorReports)> {
+) -> StreamItem<(
+    Option<Vec<((String, Span), Option<(String, Span)>)>>,
+    ErrorReports,
+)> {
     def_yeet!();
     let mut path = Vec::new();
-    let mut tmp: Option<(String, Span)> = None;
+    let mut part_before = true;
     let mut errors = Vec::new();
-    let at = loop {
+    loop {
         match source.next() {
             Some(v) => {
                 let v = yeet_value!(v.map_err(|e| StreamedError::ShouldEnd(e)));
                 match v.token {
                     Token::GroupClosing(GroupType::Brace) => {
-                        return StreamResult::Ok((Some((path, None)), errors));
+                        return StreamResult::Ok((Some(path), errors));
                     }
                     Token::Comment(_) => {
                         errors.push(err!(raw [{
@@ -130,16 +133,20 @@ pub(super) fn consume_node_path<
                         return StreamResult::Ok((None, errors));
                     }
                     Token::Slash => {
-                        if let Some(v) = tmp.take() {
-                            path.push(v)
+                        if !part_before {
+                            errors.push(err!(raw [{ InvalidNodePath, [
+                                ("before this, there is an empty segment", v.span),
+                            ]}]));
                         }
+                        part_before = false;
                     }
-                    Token::At => break v,
                     _ => {
                         source.push(StreamResult::Ok(v));
                         if !yeet_value!(consume_node_path_part(source, &mut path, &mut errors)) {
                             skip_to_node_path_end(source);
                             return StreamResult::Ok((None, errors));
+                        } else {
+                            part_before = true;
                         }
                     }
                 }
@@ -151,35 +158,7 @@ pub(super) fn consume_node_path<
                 return StreamResult::Ok((None, errors));
             }
         }
-    };
-    if let Some(v) = tmp {
-        path.push(v);
     }
-    source.push(StreamResult::Ok(at));
-    let (address, e) = yeet_value!(consume_maybe_node_address(source));
-    errors.extend(e);
-    loop {
-        match source.next() {
-            Some(v) => {
-                let v = yeet_value!(v.map_err(|e| StreamedError::ShouldEnd(e)));
-                match v.token {
-                    Token::Whitespace(_) | Token::Comment(_) => {}
-                    Token::GroupClosing(GroupType::Brace) => break,
-                    _ => errors.push(err!(raw [{ UnexpectedToken, [
-                        ("this node path is still open", opening_brace.clone()),
-                        ("this is unexpected, expected a closing", v.span),
-                    ]}])),
-                }
-            }
-            None => {
-                errors.push(err!(raw [{ UnexpectedEof, [
-                    ("this is unclosed until eof", opening_brace.clone()),
-                ]}]));
-                return StreamResult::Ok((None, errors));
-            }
-        }
-    }
-    StreamResult::Ok((Some((path, address)), errors))
 }
 
 pub(super) fn consume_maybe_node_address<

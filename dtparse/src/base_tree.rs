@@ -12,6 +12,11 @@ use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct RootScope {
+    nodes: Vec<Node>,
+}
+
+#[derive(Debug, Default)]
+pub struct RootScope {
     pub includes: Vec<(String, Span)>,
     pub nodes: Vec<Node>,
     pub root_delete_nodes: Vec<(NodeId, Span)>,
@@ -110,13 +115,13 @@ pub type PropertyValue = Vec<Item>;
 type NodeOpening = Span;
 
 #[derive(Clone, Debug)]
-enum LabelTarget {
+pub enum LabelTarget {
     Node(RawNodePath),
     Property(RawNodePath, PropertyName),
 }
 
 #[derive(Clone, Debug)]
-enum PathPart {
+pub enum PathPart {
     Node {
         name: (String, Span),
         address: Option<(String, Span)>,
@@ -124,7 +129,6 @@ enum PathPart {
     Reference(Reference),
 }
 
-type RawNodeAddress = Option<String>;
 type RawNodePath = Vec<PathPart>;
 type PropertyName = String;
 

@@ -31,6 +31,9 @@ report!(Errors(E) {
     ContentBeforeHeader[028] => "content before dts header",
     NestedMemreserve[029] => "nested memreserve directive",
     UnexpectedDtsHeader[030] => "unexpected `dts-v1` header",
+    PropertyAfterSubnodes[031] => "property after subnodes",
+    ScopeRedefinition[032] => "scope content redefinition",
+    DeleteInSameScope[033] => "delete in the same scope",
 });
 
 report!(Warnings(W) {

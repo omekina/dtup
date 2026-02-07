@@ -51,13 +51,13 @@ impl AsRef<str> for MaybeOwnedString<'_> {
     }
 }
 
-mod base_tree;
 pub mod errors;
 mod file;
 mod helpers;
 mod lexer;
 mod pointer_stream;
 pub mod report;
+mod scopes;
 mod stream_utils;
 mod string;
 mod styling;
@@ -70,6 +70,5 @@ pub use result::{ParseErrorReport, StreamResult, StreamedError};
 
 pub type Errors = Vec<ParseErrorReport>;
 
+pub use lexer::{Item, Reference};
 pub use tokenizer::Span;
-pub use lexer::Item;
-pub use base_tree::{RootScope, Node};

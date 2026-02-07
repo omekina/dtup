@@ -166,20 +166,20 @@ pub enum Item {
     String((String, Span)),
 }
 
-type NodePathPortion = (String, Span);
-type NodeAddress = String;
+type NodePathPortion = ((String, Span), Option<NodeAddress>);
+type NodeAddress = (String, Span);
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Reference {
     Label(String, Span, Span),
-    NodePath(Vec<NodePathPortion>, Option<(NodeAddress, Span)>, Span),
+    NodePath(Vec<NodePathPortion>, Span),
 }
 
 impl Reference {
     pub(crate) fn ampersand(&self) -> &Span {
         match self {
             Self::Label(_, _, span) => span,
-            Self::NodePath(_, _, span) => span,
+            Self::NodePath(_, span) => span,
         }
     }
 }

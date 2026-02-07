@@ -4,11 +4,7 @@ use crate::{
         NumericLiteral, Reference, RelationalOperation, TokenizerStreamItem, def_yeet, err,
         node::consume_node_path, skip_possible, warning,
     },
-    report::{
-        PrimitiveMainMessage, PrimitiveReport, PrimitiveReportMessage, PrimitiveReportSegment,
-        ReportInlineMessage,
-    },
-    result::{ParseErrorReport, StreamResult, StreamedError, Warnings},
+    result::{ParseErrorReport, StreamResult, StreamedError},
     stream_utils::StreamPrepend,
     tokenizer::{
         ArithmeticOperator, BitwiseOperator, GenericLiteral, GenericLiteralType, GroupType,
@@ -158,7 +154,6 @@ impl BinaryOperationPriority for BinaryOperation {
 #[derive(Debug)]
 struct BinaryOperationParsingItem {
     operation: BinaryOperation,
-    operator_span: Span,
     left: Expression,
 }
 
@@ -166,7 +161,6 @@ impl BinaryOperationParsingItem {
     fn new(operator: (BinaryOperation, Span), left: Expression) -> Self {
         Self {
             operation: operator.0,
-            operator_span: operator.1,
             left,
         }
     }
@@ -205,10 +199,6 @@ impl BinaryOperationParsingStack {
             tmp = v.operation.merge(v.left, tmp);
         }
         tmp
-    }
-
-    fn last_operator_span(&self) -> Option<Span> {
-        Some(self.stack.last()?.operator_span.clone())
     }
 }
 
@@ -540,7 +530,6 @@ struct GroupParsingStack {
 
 type WarningReports = Vec<ParseErrorReport>;
 type ErrorReports = Vec<ParseErrorReport>;
-type HasAllClosed = bool;
 
 #[derive(Debug, PartialEq)]
 enum GroupParsingStackPopResult {
@@ -728,7 +717,6 @@ mod test {
                 .unwrap()
                 .is_empty()
         );
-        println!("{stack:?}");
         let warnings = stack
             .ternary_else(Default::default(), Expression::Invalid)
             .unwrap();
@@ -800,14 +788,14 @@ pub fn consume_label_reference<
             if !errors.is_empty() {
                 return StreamResult::ProcessingError(StreamedError::CanContinue(errors));
             }
-            let Some((path, addr)) = r else {
+            let Some(path) = r else {
                 return StreamResult::ProcessingError(StreamedError::CanContinue(vec![
                     err!(raw [{
                         InvalidNodePath, [("this remains unclosed until eof", next.span)]
                     }]),
                 ]));
             };
-            StreamResult::Ok(Reference::NodePath(path, addr, ampersand))
+            StreamResult::Ok(Reference::NodePath(path, ampersand))
         }
         Token::Literal(LiteralToken::Ident(GenericLiteral { content, .. })) => {
             return StreamResult::Ok(Reference::Label(content, next.span, ampersand));
