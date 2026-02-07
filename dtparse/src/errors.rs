@@ -34,10 +34,13 @@ report!(Errors(E) {
     PropertyAfterSubnodes[031] => "property after subnodes",
     ScopeRedefinition[032] => "scope content redefinition",
     DeleteInSameScope[033] => "delete in the same scope",
+    ChainedOmits[034] => "chained `omit-if-no-ref` directives",
+    NestedReferencedNodeDelete[035] => "nested node delete with a reference",
 });
 
 report!(Warnings(W) {
     WeirdPropertyName[001] => "weird property name",
     UnenclosedNestedExpression[002] => "unenclosed nested expression",
     DtsHeaderInIncludeFile[003] => "`/dts-v1/` header in a dtsi file",
+    ChainedLabels[004] => "chained labels",
 });

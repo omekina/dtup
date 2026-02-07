@@ -69,6 +69,22 @@ pub enum CompilerDirective {
     },
 }
 
+impl CompilerDirective {
+    pub fn ident_span(&self) -> &Span {
+        match self {
+            Self::DtsHeader(span) => span,
+            Self::Include { include, .. } => include,
+            Self::Bits { bits, .. } => bits,
+            Self::OmitIfNoRef(span) => span,
+            Self::DeleteNode { delete_node, .. } => delete_node,
+            Self::DeleteProperty {
+                delete_property, ..
+            } => delete_property,
+            Self::Memreserve { memreserve, .. } => memreserve,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum NodeTarget {
     Node((NodeName, NodeAddress)),

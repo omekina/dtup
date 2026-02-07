@@ -172,6 +172,9 @@ dependencies = [
 [[package]]
 name = "dtparse"
 version = "0.1.0"
+dependencies = [
+ "indexmap",
+]
 
 [[package]]
 name = "dtq"
