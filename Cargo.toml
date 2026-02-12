@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["dtbuild","dtparse", "dtq", "dtview"]
+members = ["dtparse", "dtq", "dtview"]
 
 [profile.release]
 codegen-units = 1

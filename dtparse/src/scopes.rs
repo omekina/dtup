@@ -5,7 +5,6 @@ use crate::{
         compiler_directives::{CompilerDirective, NodeTarget},
         err, warning,
     },
-    stream_utils::StreamPrepend,
 };
 use indexmap::IndexMap;
 use std::{collections::HashMap, rc::Rc};
@@ -112,50 +111,50 @@ pub enum ParsingResult<T> {
 }
 
 #[derive(Debug, Default)]
-struct ParsingResultBuilder {
+pub(crate) struct ParsingResultBuilder {
     reports: Reports,
     allow_compilation: bool,
 }
 
 impl ParsingResultBuilder {
-    fn push_nonfatal(&mut self, report: ParseErrorReport) {
+    pub(crate) fn push_nonfatal(&mut self, report: ParseErrorReport) {
         self.reports.push(report);
     }
 
-    fn push_fatal(&mut self, report: ParseErrorReport) {
+    pub(crate) fn push_fatal(&mut self, report: ParseErrorReport) {
         self.reports.push(report);
         self.allow_compilation = false;
     }
 
-    fn push_opt_nonfatal(&mut self, report: Option<ParseErrorReport>) {
+    pub(crate) fn push_opt_nonfatal(&mut self, report: Option<ParseErrorReport>) {
         if let Some(report) = report {
             self.reports.push(report);
         }
     }
 
-    fn push_opt_fatal(&mut self, report: Option<ParseErrorReport>) {
+    pub(crate) fn push_opt_fatal(&mut self, report: Option<ParseErrorReport>) {
         if let Some(report) = report {
             self.reports.push(report);
             self.allow_compilation = false;
         }
     }
 
-    fn extend_nonfatal(&mut self, reports: Reports) {
+    pub(crate) fn extend_nonfatal(&mut self, reports: Reports) {
         self.reports.extend(reports);
     }
 
-    fn extend_fatal(&mut self, reports: Reports) {
+    pub(crate) fn extend_fatal(&mut self, reports: Reports) {
         if !reports.is_empty() {
             self.allow_compilation = false;
         }
         self.reports.extend(reports);
     }
 
-    fn prevent_compilation(&mut self) {
+    pub(crate) fn prevent_compilation(&mut self) {
         self.allow_compilation = false;
     }
 
-    fn finish<T>(self, result: T) -> ParsingResult<T> {
+    pub(crate) fn finish<T>(self, result: T) -> ParsingResult<T> {
         if self.allow_compilation {
             ParsingResult::AllowCompilation(result, self.reports)
         } else {
@@ -277,8 +276,6 @@ struct ScopeStackBuilder {
     labels: HashMap<String, (LabelTarget, Span)>,
     path_cache: Option<Rc<Vec<Rc<RawNodeId>>>>,
 }
-
-type Labels = HashMap<String, (LabelTarget, Span)>;
 
 impl ScopeStackBuilder {
     fn new(root_node: Span) -> Self {
@@ -750,9 +747,7 @@ impl<I: Iterator<Item = LexerOutput>> ScopeBuilder<'_, I> {
     }
 }
 
-impl<I: Iterator<Item = LexerOutput>> Iterator
-    for ScopeBuilder<'_, I>
-{
+impl<I: Iterator<Item = LexerOutput>> Iterator for ScopeBuilder<'_, I> {
     type Item = StreamResult<ParsingResult<RootItem>, Reports>;
 
     fn next(&mut self) -> Option<Self::Item> {

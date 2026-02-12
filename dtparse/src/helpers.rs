@@ -39,7 +39,7 @@ pub fn parse(filepath: &Path) -> StreamResult<(Vec<RootItem>, Vec<ParseErrorRepo
             StreamResult::ProcessingError(e) => {
                 reports.extend(e);
                 break;
-            },
+            }
         };
         match res {
             ParsingResult::AllowCompilation(res, e) => {

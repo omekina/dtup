@@ -36,6 +36,8 @@ report!(Errors(E) {
     NestedReferencedNodeDelete[035] => "nested node delete with a reference",
     StandardNodeOutsideScope[036] => "standard node outside scope",
     PropertyOutsideScope[037] => "property outside scope",
+    RejectedInclude[038] => "includer rejected an include",
+    DeleteTargetNotFound[039] => "delete target not found",
 });
 
 report!(Warnings(W) {

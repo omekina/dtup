@@ -62,6 +62,7 @@ mod stream_utils;
 mod string;
 mod styling;
 mod tokenizer;
+mod tree;
 
 pub use file::BasicFileReader;
 pub use helpers::parse;
