@@ -108,14 +108,21 @@ pub(super) fn consume_node_path<
 )> {
     def_yeet!();
     let mut path = Vec::new();
+    let mut path_started = false;
     let mut part_before = true;
     let mut errors = Vec::new();
     loop {
         match source.next() {
             Some(v) => {
                 let v = yeet_value!(v.map_err(|e| StreamedError::ShouldEnd(e)));
+                println!("{:?}", v);
                 match v.token {
                     Token::GroupClosing(GroupType::Brace) => {
+                        if !path_started {
+                            errors.push(err!(raw [{ InvalidNodePath, [
+                                ("the node path after this is empty", opening_brace.clone()),
+                            ]}]));
+                        }
                         return StreamResult::Ok((Some(path), errors));
                     }
                     Token::Comment(_) => {
@@ -133,6 +140,9 @@ pub(super) fn consume_node_path<
                         return StreamResult::Ok((None, errors));
                     }
                     Token::Slash => {
+                        if !path_started {
+                            path_started = true;
+                        }
                         if !part_before {
                             errors.push(err!(raw [{ InvalidNodePath, [
                                 ("before this, there is an empty segment", v.span),
@@ -141,6 +151,12 @@ pub(super) fn consume_node_path<
                         part_before = false;
                     }
                     _ => {
+                        if !path_started {
+                            errors.push(err!(raw [{ InvalidNodePath, [
+                                ("node paths must start with a slash (`/`)", v.span.clone()),
+                            ]}]));
+                            path_started = true;
+                        }
                         source.push(StreamResult::Ok(v));
                         if !yeet_value!(consume_node_path_part(source, &mut path, &mut errors)) {
                             skip_to_node_path_end(source);
@@ -174,11 +190,6 @@ pub(super) fn consume_maybe_node_address<
                 let v = yeet_value!(v.map_err(|e| StreamedError::ShouldEnd(e)));
                 match v.token {
                     Token::At => break v.span,
-                    Token::Whitespace(_) | Token::Comment(_) => {
-                        errors.push(err!(raw [{ UnexpectedWhitespace, [
-                            ("a `@` must follow right after a node name (no whitespaces)", v.span),
-                        ]}]))
-                    }
                     _ => {
                         source.push(StreamResult::Ok(v));
                         return StreamResult::Ok((None, Vec::default()));

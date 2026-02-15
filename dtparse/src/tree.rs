@@ -1,12 +1,12 @@
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc};
 
 use indexmap::IndexMap;
 
 use crate::{
-    Item, ParseErrorReport, Span, StreamResult,
-    lexer::{Expression, err},
+    ParseErrorReport, Reference, Span, StreamResult,
+    lexer::err,
     result::IoError,
-    scopes::{self, NodeScope, ParsingResult, ParsingResultBuilder, Property, RootItem},
+    scopes::{self, LabelTarget, ParsingResult, ParsingResultBuilder, Property, RootItem},
 };
 
 pub trait Includer {
@@ -53,11 +53,205 @@ type IndexMapNodeIterator = indexmap::map::IntoIter<Rc<RawNodeId>, scopes::Node>
 type ScopeStackItem = (RawNodeId, Node, IndexMapNodeIterator);
 
 #[derive(Default)]
+struct LabelTracker {
+    labels: HashMap<String, (scopes::LabelTarget, Span)>,
+}
+
+type SharedNodePath = Rc<Vec<Rc<RawNodeId>>>;
+type NodePath = Vec<NodeId>;
+
+impl LabelTracker {
+    fn extend(
+        &mut self,
+        next: HashMap<String, (scopes::LabelTarget, Span)>,
+        result: &mut ParsingResultBuilder,
+    ) {
+        for (name, target) in next {
+            self.push(name, target, result);
+        }
+    }
+
+    fn push(
+        &mut self,
+        name: String,
+        target: (scopes::LabelTarget, Span),
+        result: &mut ParsingResultBuilder,
+    ) {
+        if let Some(prev) = self.labels.get(&name) {
+            result.push_fatal(err!(raw [{ DuplicitLabel, [
+                ("previous definition is here", prev.1.clone()),
+                ("this is a label re-definition", target.1.clone()),
+            ]}]))
+        } else {
+            self.labels.insert(name, target);
+        }
+    }
+
+    fn req_node_target(
+        &self,
+        name: &str,
+        referrer: &Span,
+    ) -> Result<SharedNodePath, Fatal<Report>> {
+        match self.labels.get(name) {
+            Some((scopes::LabelTarget::Node(v), _)) => Ok(v.clone()),
+            Some((scopes::LabelTarget::Property(_), span)) => Err(err!(raw [{ NotANodeLabel, [
+                ("this label does not point to a node, but a property", span.clone()),
+                ("this needs the label to point to a node", referrer.clone()),
+            ]}])),
+            None => Err(err!(raw [{ UnknownLabel, [
+                ("this label wasn't found in this file", referrer.clone()),
+            ]}])),
+        }
+    }
+}
+
+#[derive(Default)]
 struct ScopeMerger {
     stack: Vec<ScopeStackItem>,
 }
 
+type ParentNode<'a> = &'a mut Node;
+
 impl ScopeMerger {
+    fn merge(
+        id: RawNodeId,
+        prev: Node,
+        next: scopes::Node,
+        result: &mut ParsingResultBuilder,
+    ) -> (RawNodeId, Node) {
+        let mut merger = Self::new(id, prev, next, result);
+        loop {
+            match merger.step(result) {
+                Some(v) => break v,
+                None => {}
+            }
+        }
+    }
+
+    fn merge_root_nodes(
+        prev_root: Node,
+        mut next: scopes::RootNode,
+        labels: &mut LabelTracker,
+        result: &mut ParsingResultBuilder,
+    ) -> Node {
+        labels.extend(std::mem::take(&mut next.labels), result);
+        Self::merge(("".to_string(), None), prev_root, next.into(), result).1
+    }
+
+    fn push_ref_node_labels(
+        this_labels: Vec<(String, Span)>,
+        labels: &mut LabelTracker,
+        path: SharedNodePath,
+        result: &mut ParsingResultBuilder,
+    ) {
+        for label in this_labels {
+            labels.push(label.0, (LabelTarget::Node(path.clone()), label.1), result);
+        }
+    }
+
+    fn merge_ref_node(
+        mut prev_root: Node,
+        labels: &mut LabelTracker,
+        next: scopes::RefNode,
+        result: &mut ParsingResultBuilder,
+    ) -> Result<(), Fatal<Reports>> {
+        let ampersand = next.target_node.ampersand().clone();
+        let (root, nested_id, target) = match next.target_node {
+            Reference::Label(name, span, _) => {
+                let path = match labels.req_node_target(&name, &span) {
+                    Ok(v) => v,
+                    Err(e) => return Err(vec![e]),
+                };
+                Self::push_ref_node_labels(next.this_node_labels, labels, path.clone(), result);
+                Self::req_at_path(&mut prev_root, path)
+            }
+            Reference::NodePath(path, _) => {
+                let path_shared: Option<SharedNodePath> = if next.this_node_labels.is_empty() {
+                    None
+                } else {
+                    Some(Rc::new(
+                        path.iter()
+                            .map(|v| Rc::new((v.0.0.clone(), v.1.clone().map(|v| v.0))))
+                            .collect::<Vec<_>>(),
+                    ))
+                };
+                match Self::at_path(&mut prev_root, path) {
+                    Ok(v) => {
+                        let this_labels = next.this_node_labels;
+                        if !this_labels.is_empty() {
+                            let path = path_shared.unwrap();
+                            Self::push_ref_node_labels(this_labels, labels, path, result);
+                        }
+                        v
+                    }
+                    Err(e) => return Err(vec![e]),
+                }
+            }
+        };
+        let next = scopes::Node {
+            def: (ampersand, None),
+            scope: next.scope,
+            omit_if_no_ref: false,
+        };
+        let (id, merged) = Self::merge(nested_id, target, next, result);
+        root.nodes.insert(id, merged);
+        Ok(())
+    }
+
+    /// # Panics
+    /// Will panic if the path doesn't exist
+    fn req_at_path(root: &mut Node, path: SharedNodePath) -> (ParentNode<'_>, RawNodeId, Node) {
+        let mut parent = root;
+        let last = path.last().unwrap();
+        for part in &path[..path.len() - 1] {
+            parent = parent.nodes.get_mut(&**part).unwrap();
+        }
+        let node = parent.nodes.shift_remove(&**last).unwrap();
+        (parent, (**last).clone(), node)
+    }
+
+    fn get_nested(parent: &mut Node, id: NodeId) -> Result<&mut Node, Fatal<Report>> {
+        let (address, _) = match id.1 {
+            Some((a, s)) => (Some(a), Some(s)),
+            None => (None, None),
+        };
+        let raw_id = (id.0.0, address);
+        match parent.nodes.get_mut(&raw_id) {
+            Some(v) => Ok(v),
+            None => Err(err!(raw [{ NodeNotFound, [
+                ("a matching node was not found in this scope", id.0.1),
+            ]}])),
+        }
+    }
+
+    /// # Panics
+    /// If the path is empty, this will panic. This should be checked by the caller. As root node
+    /// here can't be moved out.
+    fn at_path(
+        root: &mut Node,
+        mut path: NodePath,
+    ) -> Result<(ParentNode<'_>, RawNodeId, Node), Fatal<Report>> {
+        let mut parent = root;
+        let last = path.pop().unwrap();
+        for part in path {
+            parent = match Self::get_nested(parent, part) {
+                Ok(v) => v,
+                Err(e) => return Err(e),
+            };
+        }
+        let (last_address, _) = match last.1 {
+            Some((a, s)) => (Some(a), Some(s)),
+            None => (None, None),
+        };
+        let last_raw_id = (last.0.0, last_address);
+        match parent.nodes.shift_remove(&last_raw_id) {
+            Some(v) => Ok((parent, last_raw_id, v)),
+            None => Err(err!(raw [{ NodeNotFound, [
+                ("a matching node was not found in this scope", last.0.1),
+            ]}])),
+        }
+    }
+
     fn new(
         id: RawNodeId,
         prev: Node,
@@ -176,15 +370,7 @@ impl ScopeMerger {
     }
 }
 
-impl DeviceTree {
-    fn merge_scopes(
-        mut first: NodeScope,
-        second: NodeScope,
-    ) -> WithFatalReports<NodeScope, Reports> {
-        for (name, address) in second.delete_nodes {}
-        todo!();
-    }
-}
+impl DeviceTree {}
 
 pub fn build_tree<I: Iterator<Item = ScopeParserOutput>>(
     scope_stream: &mut I,

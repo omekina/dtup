@@ -39,6 +39,16 @@ pub struct RootNode {
     pub labels: LabelIndex,
 }
 
+impl From<RootNode> for Node {
+    fn from(value: RootNode) -> Self {
+        Self {
+            def: (value.def, None),
+            scope: value.scope,
+            omit_if_no_ref: false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct RefNode {
     pub target_node: Reference,
@@ -160,6 +170,10 @@ impl ParsingResultBuilder {
         } else {
             ParsingResult::AbortCompilation(result, self.reports)
         }
+    }
+
+    pub(crate) fn take_errors(self) -> Reports {
+        self.reports
     }
 }
 
@@ -873,6 +887,11 @@ impl<I: Iterator<Item = LexerOutput>> Iterator for ScopeBuilder<'_, I> {
             }
         }
         req_no_label!();
-        None
+        let errors = result_builder.take_errors();
+        if !errors.is_empty() {
+            Some(StreamResult::ProcessingError(errors))
+        } else {
+            None
+        }
     }
 }

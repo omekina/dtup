@@ -38,6 +38,9 @@ report!(Errors(E) {
     PropertyOutsideScope[037] => "property outside scope",
     RejectedInclude[038] => "includer rejected an include",
     DeleteTargetNotFound[039] => "delete target not found",
+    NotANodeLabel[040] => "label does point to a node",
+    UnknownLabel[041] => "unknown label name",
+    NodeNotFound[042] => "node not found in scope",
 });
 
 report!(Warnings(W) {

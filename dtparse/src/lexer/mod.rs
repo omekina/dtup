@@ -1073,16 +1073,27 @@ fn consume_ref_node_start<
         }
         StreamResult::ProcessingError(e) => return StreamResult::ProcessingError(e),
     };
-    def_yeet!([vectorize]);
-    let (opening, e) = yeet_value!(try_token_after(
+    def_yeet!();
+    let (opening, e) = match try_token_after(
         source,
-        |t| { matches!(t, Token::Whitespace(_) | Token::Comment(_)) },
-        |t| { matches!(t, Token::GroupOpening(GroupType::Brace)) },
-        "encountered a node opening after this label",
+        |t| matches!(t, Token::Whitespace(_) | Token::Comment(_)),
+        |t| matches!(t, Token::GroupOpening(GroupType::Brace)),
+        "this label's path remains unclosed",
         &ampersand,
         "after this label",
-        "expected a node opening"
-    ));
+        "expected a node opening",
+    ) {
+        StreamResult::Ok(v) => v,
+        StreamResult::IoError(e) => return StreamResult::IoError(e),
+        StreamResult::ProcessingError(StreamedError::ShouldEnd(e)) => {
+            errors.push(e);
+            return StreamResult::ProcessingError(StreamedError::ShouldEnd(errors));
+        }
+        StreamResult::ProcessingError(StreamedError::CanContinue(e)) => {
+            errors.push(e);
+            return StreamResult::ProcessingError(StreamedError::CanContinue(errors));
+        }
+    };
     if let Some(e) = e {
         errors.push(e);
     }
