@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::{
     lexer::{
         compiler_directives::{
@@ -99,6 +101,15 @@ pub enum NumericLiteral {
     Hexadecimal((String, Span)),
 }
 
+impl std::fmt::Display for NumericLiteral {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Decimal((v, _)) => write!(f, "{}", v),
+            Self::Hexadecimal((v, _)) => write!(f, "0x{}", v),
+        }
+    }
+}
+
 impl NumericLiteral {
     pub fn span(&self) -> &Span {
         match self {
@@ -117,6 +128,18 @@ pub enum ArithmeticOperation {
     Modulo,
 }
 
+impl From<&ArithmeticOperation> for &'static str {
+    fn from(value: &ArithmeticOperation) -> Self {
+        match value {
+            ArithmeticOperation::Addition => "+",
+            ArithmeticOperation::Subtraction => "-",
+            ArithmeticOperation::Multiplication => "*",
+            ArithmeticOperation::Division => "/",
+            ArithmeticOperation::Modulo => "%",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum RelationalOperation {
     Equal,
@@ -127,10 +150,32 @@ pub enum RelationalOperation {
     LessOrEqual,
 }
 
+impl From<&RelationalOperation> for &'static str {
+    fn from(value: &RelationalOperation) -> Self {
+        match value {
+            RelationalOperation::Equal => "==",
+            RelationalOperation::NotEqual => "!=",
+            RelationalOperation::GreaterThan => ">",
+            RelationalOperation::LessThan => "<",
+            RelationalOperation::GreaterOrEqual => ">=",
+            RelationalOperation::LessOrEqual => "<=",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum LogicalOperation {
     And,
     Or,
+}
+
+impl From<&LogicalOperation> for &'static str {
+    fn from(value: &LogicalOperation) -> Self {
+        match value {
+            LogicalOperation::And => "&&",
+            LogicalOperation::Or => "||",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -140,6 +185,18 @@ pub enum BitwiseOperation {
     Xor,
     LeftShift,
     RightShift,
+}
+
+impl From<&BitwiseOperation> for &'static str {
+    fn from(value: &BitwiseOperation) -> Self {
+        match value {
+            BitwiseOperation::And => "&",
+            BitwiseOperation::Or => "|",
+            BitwiseOperation::Xor => "^",
+            BitwiseOperation::LeftShift => "<<",
+            BitwiseOperation::RightShift => ">>",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -177,6 +234,53 @@ pub enum Expression {
     Reference(Reference),
 }
 
+impl Expression {
+    fn nested_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NumericLiteral(literal) => literal.fmt(f),
+            v => write!(f, "({})", v),
+        }
+    }
+}
+
+impl std::fmt::Display for Expression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid => Ok(()),
+            Self::NumericLiteral(literal) => literal.fmt(f),
+            Self::Group(expression) => write!(f, "({})", expression),
+            Self::ArithmeticOperation {
+                left,
+                right,
+                operator,
+            } => write!(f, "{} {} {}", left, <&'static str>::from(operator), right),
+            Self::RelationalOperation {
+                left,
+                right,
+                operator,
+            } => write!(f, "{} {} {}", left, <&'static str>::from(operator), right),
+            Self::LogicalOperation {
+                left,
+                right,
+                operator,
+            } => write!(f, "{} {} {}", left, <&'static str>::from(operator), right),
+            Self::LogicalNot(expression) => write!(f, "!{}", expression),
+            Self::BitwiseOperation {
+                left,
+                right,
+                operator,
+            } => write!(f, "{} {} {}", left, <&'static str>::from(operator), right),
+            Self::BitwiseNot(expression) => write!(f, "~{}", expression),
+            Self::TernaryOperation {
+                if_expr,
+                then_expr,
+                else_expr,
+            } => write!(f, "{} ? {} : {}", if_expr, then_expr, else_expr),
+            Self::Reference(reference) => write!(f, "{}", reference),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Item {
     ComplierDirective(CompilerDirective),
@@ -186,6 +290,43 @@ pub enum Item {
     String((String, Span)),
 }
 
+impl std::fmt::Display for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ComplierDirective(v) => write!(f, "{}", v)?,
+            Self::Reference(v) => write!(f, "{}", v)?,
+            Self::NumericLiteral(v) => {
+                write!(f, "<")?;
+                let mut first = true;
+                for v in v {
+                    if !first {
+                        write!(f, " ")?;
+                    } else {
+                        first = false;
+                    }
+                    v.nested_fmt(f)?;
+                }
+                write!(f, ">")?;
+            }
+            Self::ByteString(v) => {
+                write!(f, "[")?;
+                let mut first = true;
+                for v in v {
+                    if !first {
+                        write!(f, " ")?;
+                    } else {
+                        first = false;
+                    }
+                    write!(f, "{}", v.0)?;
+                }
+                write!(f, "]")?;
+            }
+            Self::String(v) => write!(f, "{:?}", v.0)?,
+        }
+        Ok(())
+    }
+}
+
 type NodePathPortion = ((String, Span), Option<NodeAddress>);
 type NodeAddress = (String, Span);
 
@@ -193,6 +334,28 @@ type NodeAddress = (String, Span);
 pub enum Reference {
     Label(String, Span, Span),
     NodePath(Vec<NodePathPortion>, Span),
+}
+
+impl std::fmt::Display for Reference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Label(name, _, _) => write!(f, "&{}", name)?,
+            Self::NodePath(path, _) => {
+                write!(f, "&{{")?;
+                if path.is_empty() {
+                    write!(f, "/")?;
+                }
+                for part in path {
+                    write!(f, "/{}", part.0.0)?;
+                    if let Some(ref address) = part.1 {
+                        write!(f, "@{}", address.0)?;
+                    }
+                }
+                write!(f, "}}")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Reference {

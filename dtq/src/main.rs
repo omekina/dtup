@@ -32,6 +32,6 @@ fn main() {
         stdout.write_all(b"\n").unwrap();
     }
     stdout.flush().unwrap();
-    println!("compilation took {:?}", execution_time);
-    println!("{:?}", tokens);
+    eprintln!("compilation took {:?}", execution_time);
+    println!("{}", tokens);
 }

@@ -69,6 +69,22 @@ pub enum CompilerDirective {
     },
 }
 
+impl std::fmt::Display for CompilerDirective {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DtsHeader(_) => write!(f, "/dts-v1/;"),
+            Self::Include { target, .. } => write!(f, "/include/ {:?}", target.0),
+            Self::Bits { size, .. } => write!(f, "/bits/ {}", size.0),
+            Self::OmitIfNoRef(_) => write!(f, "/omit-if-no-ref/"),
+            Self::DeleteNode { target, .. } => write!(f, "{}", target),
+            Self::DeleteProperty { target, .. } => write!(f, "/delete-property/ {}", target.0),
+            Self::Memreserve {
+                address, length, ..
+            } => write!(f, "/memreserve/ {} {}", address, length),
+        }
+    }
+}
+
 impl CompilerDirective {
     pub fn ident_span(&self) -> &Span {
         match self {
@@ -89,6 +105,21 @@ impl CompilerDirective {
 pub enum NodeTarget {
     Node((NodeName, NodeAddress)),
     Reference(Reference),
+}
+
+impl std::fmt::Display for NodeTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Node((name, address)) => {
+                write!(f, "{}", name.0)?;
+                if let Some(address) = address {
+                    write!(f, "@{}", address.0)?;
+                }
+                Ok(())
+            }
+            Self::Reference(reference) => write!(f, "{}", reference),
+        }
+    }
 }
 
 impl NodeTarget {

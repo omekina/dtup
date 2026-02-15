@@ -74,6 +74,22 @@ impl Includer for SimpleFileSystemIncluder {
     }
 }
 
+trait IndentedDisplay {
+    fn in_fmt(&self, f: &mut std::fmt::Formatter<'_>, base_indents: usize) -> std::fmt::Result;
+}
+
+macro_rules! writeinln {
+    ($formatter: expr, $indents: expr, $format: literal $(, $($arg: tt)*)?) => {
+        writeln!($formatter, concat!("{}", $format), "\t".repeat($indents), $($($arg)*)*)
+    }
+}
+
+macro_rules! writein {
+    ($formatter: expr, $indents: expr, $format: literal $(, $($arg: tt)*)?) => {
+        write!($formatter, concat!("{}", $format), "\t".repeat($indents), $($($arg)*)*)
+    }
+}
+
 type SpanString = (String, Span);
 type NodeName = SpanString;
 type NodeAddress = SpanString;
@@ -92,11 +108,78 @@ pub struct DeviceTree {
     root: Node,
 }
 
+impl std::fmt::Display for DeviceTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.in_fmt(f, 0)
+    }
+}
+
+impl IndentedDisplay for DeviceTree {
+    fn in_fmt(&self, f: &mut std::fmt::Formatter<'_>, base_indents: usize) -> std::fmt::Result {
+        writeinln!(f, base_indents, "/dts-v1/;\n")?;
+        for memreserve in self.memory_reservations.iter() {
+            writeinln!(
+                f,
+                base_indents,
+                "/memreserve/ {} {}",
+                memreserve.0,
+                memreserve.1
+            )?;
+        }
+        if !self.memory_reservations.is_empty() {
+            writeinln!(f, base_indents, "")?;
+        }
+        writein!(f, base_indents, "/")?;
+        self.root.in_fmt(f, base_indents + 1)
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct Node {
     pub defs: Vec<Span>,
     pub nodes: IndexMap<RawNodeId, Node>,
     pub properties: IndexMap<String, Property>,
+}
+
+impl IndentedDisplay for Node {
+    fn in_fmt(&self, f: &mut std::fmt::Formatter<'_>, base_indents: usize) -> std::fmt::Result {
+        if self.properties.is_empty() && self.nodes.is_empty() {
+            writeln!(f, " {{}};")?;
+            return Ok(());
+        }
+        writeln!(f, " {{")?;
+        for (name, value) in &self.properties {
+            match value.value {
+                Some(ref v) => {
+                    writein!(f, base_indents, "{} = ", name)?;
+                    let mut first = true;
+                    for item in v {
+                        if !first {
+                            write!(f, ", ")?;
+                        } else {
+                            first = false;
+                        }
+                        write!(f, "{}", item)?;
+                    }
+                    writeln!(f, ";")?;
+                },
+                None => writeinln!(f, base_indents, "{};", name)?,
+            }
+        }
+        if !self.properties.is_empty() && !self.nodes.is_empty() {
+            writeln!(f)?;
+        }
+        for (name, node) in &self.nodes {
+            writein!(f, base_indents, "{}", name.0)?;
+            if let Some(ref address) = name.1 {
+                write!(f, "@{}", address)?;
+            }
+            node.in_fmt(f, base_indents + 1)?;
+
+        }
+        writeinln!(f, base_indents - 1, "}};")?;
+        Ok(())
+    }
 }
 
 type Report = ParseErrorReport;
