@@ -80,7 +80,7 @@ impl std::fmt::Display for CompilerDirective {
             Self::DeleteProperty { target, .. } => write!(f, "/delete-property/ {}", target.0),
             Self::Memreserve {
                 address, length, ..
-            } => write!(f, "/memreserve/ {} {}", address, length),
+            } => write!(f, "/memreserve/ {} {};", address, length),
         }
     }
 }
