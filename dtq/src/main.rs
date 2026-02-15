@@ -1,5 +1,8 @@
 use clap::Parser;
-use dtparse::{BasicFileReader, ParseErrorReport, ReportDisplay, parse};
+use dtparse::{
+    BasicFileReader, ParseErrorReport, ParsingResult, ReportDisplay, SimpleFileSystemIncluder,
+    parse,
+};
 use std::io::{BufWriter, Stdout, Write, stdout};
 
 #[derive(Parser)]
@@ -19,8 +22,8 @@ fn main() {
 
     let mut stdout = BufWriter::new(stdout());
     let start_time = std::time::Instant::now();
-    let (tokens, reports) = match parse(&args.input_file) {
-        Ok(v) => v,
+    let (tokens, reports) = match parse(&args.input_file, &mut SimpleFileSystemIncluder::new(".")) {
+        Ok(ParsingResult::AbortCompilation(v, e) | ParsingResult::AllowCompilation(v, e)) => (v, e),
         Err(e) => panic!("io error: {e:?}"),
     };
     let execution_time = start_time.elapsed();

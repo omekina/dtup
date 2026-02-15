@@ -6,11 +6,14 @@ use crate::{
     stream_utils::StackSingleItemPrependableStream,
     string::StringDecoder,
     tokenizer::{ErrorSkipper, Tokenizer},
-    tree::{DeviceTree, FailingIncluder, build_tree},
+    tree::{DeviceTree, Includer, build_tree},
 };
 use std::{fs::File, io::Read, path::Path};
 
-pub fn parse(filepath: &Path) -> Result<(DeviceTree, Vec<ParseErrorReport>), IoError> {
+pub fn parse(
+    filepath: &Path,
+    includer: &mut impl Includer,
+) -> Result<ParsingResult<DeviceTree>, IoError> {
     let file = match File::open(filepath) {
         Ok(v) => v,
         Err(e) => return Err(e.into()),
@@ -31,9 +34,5 @@ pub fn parse(filepath: &Path) -> Result<(DeviceTree, Vec<ParseErrorReport>), IoE
         &mut lexer,
         filepath.extension().map(|v| v == "dtsi").unwrap_or(false),
     );
-    match build_tree(&mut scope_builder, &mut FailingIncluder::default()) {
-        Ok(ParsingResult::AbortCompilation(v, e)) => Ok((v, e)),
-        Ok(ParsingResult::AllowCompilation(v, e)) => Ok((v, e)),
-        Err(e) => Err(e),
-    }
+    build_tree(&mut scope_builder, includer)
 }

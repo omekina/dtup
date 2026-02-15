@@ -1,4 +1,8 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    rc::Rc,
+};
 
 use indexmap::IndexMap;
 
@@ -19,15 +23,54 @@ pub trait Includer {
     ) -> Result<Result<ParsingResult<DeviceTree>, IoError>, String>;
 }
 
-#[derive(Default)]
-pub struct FailingIncluder;
+pub struct SimpleFileSystemIncluder {
+    base_dir: PathBuf,
+    includes: HashSet<String>,
+}
 
-impl Includer for FailingIncluder {
+impl SimpleFileSystemIncluder {
+    pub fn new(base_dir: &str) -> Self {
+        Self {
+            base_dir: PathBuf::from(base_dir).canonicalize().unwrap(),
+            includes: HashSet::default(),
+        }
+    }
+}
+
+impl Includer for SimpleFileSystemIncluder {
     fn include(
         &mut self,
-        _target: &str,
+        target_raw: &str,
     ) -> Result<Result<ParsingResult<DeviceTree>, IoError>, String> {
-        Err("this is a test includer and will always fail".to_string())
+        let target = self.base_dir.join(target_raw);
+        for part in &target {
+            if part == ".." || part == "." {
+                return Err("include paths can't contain `.` and `..` parts".to_string());
+            }
+        }
+        let target = match target.canonicalize() {
+            Ok(v) => v,
+            Err(_) => {
+                return Err("target file does not exist".to_string());
+            }
+        };
+        if !target.starts_with(&self.base_dir) {
+            return Err(format!(
+                "can't include above the basedir ({:?})",
+                self.base_dir
+            ));
+        }
+        if !target.is_file() {
+            return Err("target file is not a regular file".to_string());
+        }
+        if !target.extension().map(|v| v == "dtsi").unwrap_or(false) {
+            return Err("can only include files with `dtsi` extesion".to_string());
+        }
+        if self.includes.contains(target_raw) {
+            return Err("this file is included multiple times".to_string());
+        }
+        self.includes.insert(target_raw.to_string());
+        Ok(crate::helpers::parse(&target, self))
     }
 }
 
@@ -60,12 +103,8 @@ type Report = ParseErrorReport;
 type Reports = Vec<Report>;
 
 type Fatal<T> = T;
-type NonFatal<T> = T;
 
 type ScopeParserOutput = StreamResult<ParsingResult<RootItem>, Reports>;
-
-type WithFatalReports<T, R> = (T, Fatal<R>);
-type WithNonFatalReports<T, R> = (T, NonFatal<R>);
 
 type IndexMapNodeIterator = indexmap::map::IntoIter<Rc<RawNodeId>, scopes::Node>;
 type ScopeStackItem = (RawNodeId, Node, IndexMapNodeIterator);
