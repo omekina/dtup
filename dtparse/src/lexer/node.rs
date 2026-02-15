@@ -115,7 +115,6 @@ pub(super) fn consume_node_path<
         match source.next() {
             Some(v) => {
                 let v = yeet_value!(v.map_err(|e| StreamedError::ShouldEnd(e)));
-                println!("{:?}", v);
                 match v.token {
                     Token::GroupClosing(GroupType::Brace) => {
                         if !path_started {

@@ -41,6 +41,9 @@ report!(Errors(E) {
     NotANodeLabel[040] => "label does point to a node",
     UnknownLabel[041] => "unknown label name",
     NodeNotFound[042] => "node not found in scope",
+    IncludeRejected[043] => "include rejected",
+    DeleteOnRoot[044] => "delete node on root",
+    DirectDeleteOutsideScope[045] => "direct delete outside scope",
 });
 
 report!(Warnings(W) {
