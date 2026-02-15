@@ -35,6 +35,10 @@ impl SimpleFileSystemIncluder {
             includes: HashSet::default(),
         }
     }
+
+    pub fn ref_includes(&self) -> &HashSet<String> {
+        &self.includes
+    }
 }
 
 impl Includer for SimpleFileSystemIncluder {
@@ -162,7 +166,7 @@ impl IndentedDisplay for Node {
                         write!(f, "{}", item)?;
                     }
                     writeln!(f, ";")?;
-                },
+                }
                 None => writeinln!(f, base_indents, "{};", name)?,
             }
         }
@@ -175,7 +179,6 @@ impl IndentedDisplay for Node {
                 write!(f, "@{}", address)?;
             }
             node.in_fmt(f, base_indents + 1)?;
-
         }
         writeinln!(f, base_indents - 1, "}};")?;
         Ok(())

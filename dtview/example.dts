@@ -1,0 +1,11 @@
+/dts-v1/;
+
+/ {
+	Hello {
+		phandle = <1>;
+	};
+
+	World {
+		phandle = <2>;
+	};
+};

@@ -1,0 +1,16 @@
+{
+  "name": "dtview",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "html-minifier": "^4.0.0",
+    "sass": "^1.97.3"
+  }
+}
