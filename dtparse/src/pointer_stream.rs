@@ -6,10 +6,16 @@ use crate::{
     result::{Errors, IoError, ParseErrorReport, StreamResult},
     string::Utf8DecodingError,
 };
-use std::{
-    path::{Path, PathBuf},
-    rc::Rc,
-};
+use std::path::{Path, PathBuf};
+
+#[cfg(not(feature = "multithread"))]
+use std::rc::Rc;
+
+#[cfg(feature = "multithread")]
+use std::sync::Arc;
+
+#[cfg(feature = "serde")]
+use serde::Serialize;
 
 pub trait RawPointerStream {
     /// Absolute byte offset of the previously consumed symbol
@@ -27,14 +33,40 @@ pub trait PointerStream {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(test, derive(Default))]
 pub struct Pos {
+    #[cfg(not(feature = "multithread"))]
     file: Rc<PathBuf>,
+    #[cfg(feature = "multithread")]
+    file: Arc<PathBuf>,
     line: usize,
     line_start_byte: usize,
     col: usize,
 }
 
+#[cfg(feature = "serde")]
+impl Serialize for Pos {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("Pos", 4)?;
+        state.serialize_field("file", &*self.file)?;
+        state.serialize_field("line", &self.line)?;
+        state.serialize_field("line_start_byte", &self.line_start_byte)?;
+        state.serialize_field("col", &self.col)?;
+        state.end()
+    }
+}
+
 impl Pos {
-    pub fn new(file: Rc<PathBuf>, line: usize, line_start_byte: usize, col: usize) -> Self {
+    pub fn new(
+        #[cfg(not(feature = "multithread"))] file: Rc<PathBuf>,
+        #[cfg(feature = "multithread")] file: Arc<PathBuf>,
+        line: usize,
+        line_start_byte: usize,
+        col: usize,
+    ) -> Self {
         Self {
             file,
             line,
@@ -119,7 +151,10 @@ impl<I> RawPointerStream for RawPointerTracker<'_, I> {
 #[derive(Debug)]
 pub struct PointerTracker<'a, I> {
     source: &'a mut I,
+    #[cfg(not(feature = "multithread"))]
     file: Rc<PathBuf>,
+    #[cfg(feature = "multithread")]
+    file: Arc<PathBuf>,
     line: usize,
     /// byte offset of the line start
     line_offset: usize,

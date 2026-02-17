@@ -20,6 +20,9 @@ use crate::{
     },
 };
 
+#[cfg(feature = "serde")]
+use serde::Serialize;
+
 pub(crate) mod compiler_directives;
 pub(crate) mod expressions;
 pub(crate) mod node;
@@ -289,6 +292,16 @@ pub enum Item {
     NumericLiteral(Vec<Expression>),
     ByteString(Vec<(String, Span)>),
     String((String, Span)),
+}
+
+#[cfg(feature = "serde")]
+impl Serialize for Item {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
 }
 
 impl std::fmt::Display for Item {
@@ -1182,7 +1195,7 @@ fn consume_statement<
                 StreamResult::IoError(e) => return StreamResult::IoError(e),
                 StreamResult::ProcessingError(e) => return StreamResult::ProcessingError(e),
             };
-            let abort = abort || (e.is_empty());
+            let abort = abort || (!e.is_empty());
             let mut reports = reports.unwrap_or_default();
             reports.extend(w.into_iter());
             reports.extend(e.into_iter());

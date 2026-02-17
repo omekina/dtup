@@ -9,6 +9,9 @@ use crate::{
 use indexmap::IndexMap;
 use std::{collections::HashMap, rc::Rc};
 
+#[cfg(feature = "serde")]
+use serde::Serialize;
+
 #[derive(Debug)]
 pub struct Node {
     pub def: (Span, Option<Span>),
@@ -25,6 +28,7 @@ pub struct NodeScope {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Property {
     pub def: Span,
     pub value: Option<PropertyValue>,
@@ -115,15 +119,25 @@ type Fatal<T> = T;
 type NonFatal<T> = T;
 
 #[derive(Debug)]
+#[must_use]
 pub enum ParsingResult<T> {
     AbortCompilation(T, Reports),
     AllowCompilation(T, Reports),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ParsingResultBuilder {
     reports: Reports,
     allow_compilation: bool,
+}
+
+impl Default for ParsingResultBuilder {
+    fn default() -> Self {
+        Self {
+            reports: Reports::default(),
+            allow_compilation: true,
+        }
+    }
 }
 
 impl ParsingResultBuilder {
@@ -538,8 +552,7 @@ macro_rules! def_next {
                 return def_next!(@err $mode StreamResult::ProcessingError(e));
             }
             Some(StreamResult::ProcessingError(StreamedError::CanContinue(e))) => {
-                $result_builder.extend_fatal(e);
-                $result_builder.prevent_compilation();
+                $result_builder.extend_nonfatal(e);
                 None
             }
             None => None,
@@ -627,7 +640,7 @@ impl<I: Iterator<Item = LexerOutput>> ScopeBuilder<'_, I> {
             LexerToken::Statement(Statement::FlagProperty { property_name }) => {
                 let (labels, error) = std::mem::take(prefixer).attribute(&property_name.1);
                 result_builder.push_opt_fatal(error);
-                stack.add_property(property_name, None, labels);
+                result_builder.extend_fatal(stack.add_property(property_name, None, labels));
                 true
             }
             LexerToken::Statement(Statement::PropertyAssignment {
@@ -637,7 +650,7 @@ impl<I: Iterator<Item = LexerOutput>> ScopeBuilder<'_, I> {
             }) => {
                 let (labels, error) = std::mem::take(prefixer).attribute(&property_name.1);
                 result_builder.push_opt_fatal(error);
-                stack.add_property(property_name, Some(expr), labels);
+                result_builder.extend_fatal(stack.add_property(property_name, Some(expr), labels));
                 true
             }
 

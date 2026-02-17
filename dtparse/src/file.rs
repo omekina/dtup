@@ -36,6 +36,12 @@ impl std::fmt::Display for BasicFileReaderError {
     }
 }
 
+impl From<BasicFileReaderError> for std::io::Error {
+    fn from(value: BasicFileReaderError) -> Self {
+        Self::new(std::io::ErrorKind::Other, value)
+    }
+}
+
 impl std::error::Error for BasicFileReaderError {
     fn cause(&self) -> Option<&dyn std::error::Error> {
         match self {
@@ -65,8 +71,10 @@ impl BasicFileReader {
     }
 
     fn seek(file: &mut File, offset: usize) -> Result<(), IoError> {
-        file.seek(SeekFrom::Start(offset.try_into()?))
-            .map_err(BasicFileReaderError::FSeekError)?;
+        file.seek(SeekFrom::Start(offset.try_into().map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        })?))
+        .map_err(BasicFileReaderError::FSeekError)?;
         Ok(())
     }
 
@@ -128,9 +136,9 @@ pub enum BasicFileStreamerError {
     ReadError(std::io::Error),
 }
 
-impl From<BasicFileStreamerError> for Box<dyn std::error::Error + Send> {
+impl From<BasicFileStreamerError> for std::io::Error {
     fn from(value: BasicFileStreamerError) -> Self {
-        Box::new(value)
+        value.into()
     }
 }
 

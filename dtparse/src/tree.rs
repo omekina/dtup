@@ -1,11 +1,3 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    rc::Rc,
-};
-
-use indexmap::IndexMap;
-
 use crate::{
     ParseErrorReport, Reference, Span, StreamResult,
     lexer::{NumericLiteral, err},
@@ -15,6 +7,15 @@ use crate::{
         RootItem,
     },
 };
+use indexmap::IndexMap;
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    rc::Rc,
+};
+
+#[cfg(feature = "serde")]
+use serde::Serialize;
 
 pub trait Includer {
     fn include(
@@ -25,7 +26,7 @@ pub trait Includer {
 
 pub struct SimpleFileSystemIncluder {
     base_dir: PathBuf,
-    includes: HashSet<String>,
+    includes: HashSet<PathBuf>,
 }
 
 impl SimpleFileSystemIncluder {
@@ -36,8 +37,12 @@ impl SimpleFileSystemIncluder {
         }
     }
 
-    pub fn ref_includes(&self) -> &HashSet<String> {
+    pub fn ref_includes(&self) -> &HashSet<PathBuf> {
         &self.includes
+    }
+
+    pub fn included_files(self) -> Vec<PathBuf> {
+        Vec::from_iter(self.includes.into_iter().map(|v| v.into()))
     }
 }
 
@@ -70,10 +75,10 @@ impl Includer for SimpleFileSystemIncluder {
         if !target.extension().map(|v| v == "dtsi").unwrap_or(false) {
             return Err("can only include files with `dtsi` extesion".to_string());
         }
-        if self.includes.contains(target_raw) {
+        if self.includes.contains(&target) {
             return Err("this file is included multiple times".to_string());
         }
-        self.includes.insert(target_raw.to_string());
+        self.includes.insert(target.clone());
         Ok(crate::helpers::parse(&target, self))
     }
 }
@@ -108,8 +113,8 @@ type MemoryReservation = (Address, Length);
 
 #[derive(Default, Debug)]
 pub struct DeviceTree {
-    memory_reservations: Vec<MemoryReservation>,
-    root: Node,
+    pub memory_reservations: Vec<MemoryReservation>,
+    pub root: Node,
 }
 
 impl std::fmt::Display for DeviceTree {
@@ -143,6 +148,34 @@ pub struct Node {
     pub defs: Vec<Span>,
     pub nodes: IndexMap<RawNodeId, Node>,
     pub properties: IndexMap<String, Property>,
+}
+
+#[cfg(feature = "serde")]
+impl Serialize for Node {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("Node", 3)?;
+        state.serialize_field("defs", &self.defs)?;
+        state.serialize_field(
+            "nodes",
+            &self
+                .nodes
+                .iter()
+                .map(|(k, v)| {
+                    let id = match k.1 {
+                        Some(ref v) => format!("{}@{}", k.0, v),
+                        None => k.0.to_string(),
+                    };
+                    (id, v)
+                })
+                .collect::<HashMap<_, _>>(),
+        )?;
+        state.end()
+    }
 }
 
 impl IndentedDisplay for Node {

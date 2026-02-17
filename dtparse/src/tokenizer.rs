@@ -7,8 +7,12 @@ use crate::{
     stream_utils::{PrependablePointer, StreamPrepend},
 };
 
+#[cfg(feature = "serde")]
+use serde::Serialize;
+
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(test, derive(Default))]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Span {
     pub ptr: Pos,
     pub span: usize,
@@ -811,6 +815,7 @@ where
     StreamResult::Ok(res)
 }
 
+#[must_use]
 pub struct ErrorSkipper<'a, I> {
     source: &'a mut I,
     errors: Vec<ParseErrorReport>,
@@ -828,8 +833,8 @@ impl<'a, I> ErrorSkipper<'a, I> {
 }
 
 impl<I> ErrorSkipper<'_, I> {
-    pub fn take_errors(&mut self) -> Vec<ParseErrorReport> {
-        std::mem::take(&mut self.errors)
+    pub fn take_errors(self) -> Vec<ParseErrorReport> {
+        self.errors
     }
 }
 

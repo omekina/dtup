@@ -34,5 +34,14 @@ pub fn parse(
         &mut lexer,
         filepath.extension().map(|v| v == "dtsi").unwrap_or(false),
     );
-    build_tree(&mut scope_builder, includer)
+    build_tree(&mut scope_builder, includer).map(|v| match v {
+        ParsingResult::AbortCompilation(r, mut e) => {
+            e.extend(error_skipper.take_errors());
+            ParsingResult::AbortCompilation(r, e)
+        }
+        ParsingResult::AllowCompilation(r, mut e) => {
+            e.extend(error_skipper.take_errors());
+            ParsingResult::AllowCompilation(r, e)
+        }
+    })
 }

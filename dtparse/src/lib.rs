@@ -69,7 +69,7 @@ pub use helpers::parse;
 pub use report::ReportDisplay;
 pub use result::{ParseErrorReport, StreamResult, StreamedError};
 pub use scopes::ParsingResult;
-pub use tree::SimpleFileSystemIncluder;
+pub use tree::{DeviceTree, Node, SimpleFileSystemIncluder};
 
 pub type Errors = Vec<ParseErrorReport>;
 

@@ -31,14 +31,18 @@ pub(super) use {
 
 #[derive(Debug)]
 pub struct IoError {
-    error: Box<dyn std::error::Error>,
+    pub error: std::io::Error,
 }
 
-impl<E: std::error::Error + 'static> From<E> for IoError {
-    fn from(value: E) -> Self {
-        Self {
-            error: Box::new(value),
-        }
+impl IoError {
+    fn new(error: std::io::Error) -> Self {
+        Self { error }
+    }
+}
+
+impl<T: Into<std::io::Error>> From<T> for IoError {
+    fn from(value: T) -> Self {
+        Self::new(value.into())
     }
 }
 
