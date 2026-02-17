@@ -174,6 +174,7 @@ impl Serialize for Node {
                 })
                 .collect::<HashMap<_, _>>(),
         )?;
+        state.serialize_field("properties", &self.properties)?;
         state.end()
     }
 }

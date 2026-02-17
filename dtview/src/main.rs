@@ -57,7 +57,7 @@ async fn script() -> impl Responder {
 #[get("/style.css")]
 async fn style() -> impl Responder {
     HttpResponseBuilder::new(StatusCode::OK)
-        .content_type("style/css")
+        .content_type("text/css")
         .body(include_str!("../target/style.css"))
 }
 
