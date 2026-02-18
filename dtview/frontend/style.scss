@@ -9,6 +9,7 @@ body {
   align-items: center;
   width: 100%;
   height: 100%;
+  transition: .25s ease opacity;
 }
 
 .tree {
@@ -45,6 +46,7 @@ body {
   padding-bottom: .5em;
   text-align: center;
   font-family: monospace;
+  cursor: pointer;
 }
 
 .node-properties {
@@ -56,6 +58,7 @@ body {
 .property {
   display: flex;
   font-family: monospace;
+  cursor: pointer;
 
   p {
     margin: 0;
@@ -72,4 +75,58 @@ body {
   height: 1em;
   overflow: hidden;
   padding-left: .25em;
+}
+
+.file-content {
+  display: flex;
+  flex-direction: column;
+  padding: .5em 1em;
+  font-family: monospace;
+  color: white;
+  background-color: #222;
+  width: 100%;
+
+  p {
+    white-space: pre-wrap;
+    margin: 0em;
+  }
+
+  .highlighted {
+    background-color: #552;
+  }
+}
+
+.file-wrapper {
+  width: 90%;
+
+  button {
+    border: 1px solid black;
+    margin: 1em auto;
+    background-color: transparent;
+    outline: none;
+    cursor: pointer;
+    &:hover {
+      background-color: #ccc;
+    }
+  }
+}
+
+.source-line {
+  display: flex;
+
+  .line-number {
+    width: 5em;
+  }
+}
+
+.filepath {
+  margin: 2em 0;
+}
+
+.error {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  justify-content: center;
+  align-items: center;
 }

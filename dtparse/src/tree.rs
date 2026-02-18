@@ -172,7 +172,7 @@ impl Serialize for Node {
                     };
                     (id, v)
                 })
-                .collect::<HashMap<_, _>>(),
+                .collect::<IndexMap<_, _>>(),
         )?;
         state.serialize_field("properties", &self.properties)?;
         state.end()

@@ -89,9 +89,11 @@ fn write_report(report: ParseErrorReport, stdout: &mut BufWriter<Stdout>) {
 
 fn print_reports(reports: Vec<ParseErrorReport>) {
     let mut stdout = BufWriter::new(std::io::stdout());
+    writeln!(stdout).unwrap();
     for report in reports {
         write_report(report, &mut stdout);
     }
+    writeln!(stdout).unwrap();
     stdout.flush().unwrap();
 }
 
