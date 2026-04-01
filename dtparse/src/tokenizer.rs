@@ -182,6 +182,8 @@ pub enum WhitespaceTokenType {
     Tab,
     /// `\n`
     Newline,
+    /// `\r`
+    CarriageReturn,
 }
 
 impl std::fmt::Display for WhitespaceTokenType {
@@ -190,6 +192,7 @@ impl std::fmt::Display for WhitespaceTokenType {
             Self::Space => write!(f, " "),
             Self::Tab => write!(f, "\t"),
             Self::Newline => writeln!(f),
+            Self::CarriageReturn => write!(f, "\r"),
         }
     }
 }
@@ -202,6 +205,7 @@ impl TryFrom<char> for WhitespaceTokenType {
             ' ' => Self::Space,
             '\t' => Self::Tab,
             '\n' => Self::Newline,
+            '\r' => Self::CarriageReturn,
             _ => Err(())?,
         })
     }
@@ -552,7 +556,7 @@ where
                 (Token::Literal(LiteralToken::Ident(v.0)), v.1)
             }
 
-            v @ (' ' | '\t' | '\n') => {
+            v @ (' ' | '\t' | '\n' | '\r') => {
                 let count = try_result!(count_matching(&v, self.source)) + 1;
                 let of_type: WhitespaceTokenType = v.try_into().unwrap();
                 (Token::Whitespace(WhitespaceToken { of_type, count }), count)
