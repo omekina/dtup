@@ -22,8 +22,13 @@ fn main() {
 
     let mut stdout = BufWriter::new(stdout());
     let start_time = std::time::Instant::now();
+    let mut abort = false;
     let (tokens, reports) = match parse(&args.input_file, &mut SimpleFileSystemIncluder::new(".")) {
-        Ok(ParsingResult::AbortCompilation(v, e) | ParsingResult::AllowCompilation(v, e)) => (v, e),
+        Ok(ParsingResult::AbortCompilation(v, e)) => {
+            abort = true;
+            (v, e)
+        },
+        Ok(ParsingResult::AllowCompilation(v, e)) => (v, e),
         Err(e) => panic!("io error: {e:?}"),
     };
     let execution_time = start_time.elapsed();
@@ -32,6 +37,8 @@ fn main() {
         stdout.write_all(b"\n").unwrap();
     }
     stdout.flush().unwrap();
-    eprintln!("compilation took {:?}", execution_time);
-    println!("{}", tokens);
+    if !abort {
+        eprintln!("compilation took {:?}", execution_time);
+        println!("{}", tokens);
+    }
 }
