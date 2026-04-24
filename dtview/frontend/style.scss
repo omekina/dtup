@@ -1,3 +1,5 @@
+@use "sass:color";
+
 body {
   font-family: sans-serif;
   margin: 0;
@@ -43,16 +45,20 @@ body {
   font-size: 1.2em;
   font-weight: bold;
   border-bottom: 1px solid gray;
+  padding: 0 .5em;
   padding-bottom: .5em;
   text-align: center;
   font-family: monospace;
   cursor: pointer;
+  word-break:break-all;
 }
 
 .node-properties {
   display: flex;
   flex-direction: column;
   padding: .5em;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .property {
@@ -62,18 +68,26 @@ body {
 
   p {
     margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
   }
 }
 
 .property-name {
+  flex: 0 0 auto;
   font-weight: bold;
   padding-right: .25em;
+  box-sizing: border-box;
 }
 
 .property-value {
+  flex: 1 1 0;
   width: 20em;
   height: 1em;
-  overflow: hidden;
   padding-left: .25em;
 }
 
@@ -85,8 +99,10 @@ body {
   color: white;
   background-color: #222;
   width: 100%;
+  box-sizing: border-box;
+  border-radius: .5em;
 
-  p {
+  p, span {
     white-space: pre-wrap;
     margin: 0em;
   }
@@ -98,9 +114,20 @@ body {
 
 .file-wrapper {
   width: 90%;
+  margin: 2em 0;
+
+  .back {
+    position: fixed;
+    top: 2em;
+    right: 2em;
+    background-color: color.adjust(blue, $lightness: 45%);
+  }
 
   button {
-    border: 1px solid black;
+    transition: .2s ease;
+    border: .2em solid gray;
+    border-radius: 1em;
+    padding: .5em 1em;
     margin: 1em auto;
     background-color: transparent;
     outline: none;
@@ -116,11 +143,18 @@ body {
 
   .line-number {
     width: 5em;
+    color: #aaa;
+    user-select: none;
   }
 }
 
 .filepath {
   margin: 2em 0;
+  margin-top: 6em;
+  font-family: monospace;
+  border-bottom: .2em solid lightblue;
+  padding-bottom: .5em;
+  width: fit-content;
 }
 
 .error {

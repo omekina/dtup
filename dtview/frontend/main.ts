@@ -72,10 +72,10 @@ class ViewMgr {
 
 	public async show_source(span: Span) {
 		const source = this.sources[span.ptr.file]!;
-		source.highlight_line(span.ptr.line);
 		await this.hide();
 		this.root_el.innerHTML = "";
 		this.root_el.appendChild(source.el());
+		source.highlight_line(span.ptr.line);
 		await this.show();
 	}
 
@@ -94,15 +94,17 @@ class Source {
 		this.lines = [];
 		let idx = 1;
 		for (const line of content.split("\n")) {
+			let content = document.createElement("span");
+			content.innerText = line;
 			this.lines.push(el.div([
 				el.p(String(idx++), { classes: ["line-number"] }),
-				el.p(line),
+				content,
 			], { classes: ["source-line"] }));
 		}
 		this.root_el = el.div([
 			el.button("Back to tree view", () => {
 				mgr.show_tree();
-			}),
+			}, { classes: ["back"] }),
 			el.p(path, { classes: ["filepath"] }),
 			el.div(this.lines, { classes: ["file-content"] })
 		], { classes: ["file-wrapper"] });
