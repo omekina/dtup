@@ -5,9 +5,16 @@ use dtparse::{
 };
 use std::io::{BufWriter, Stdout, Write, stdout};
 
+/// dtq (`devicetree query`)
+///
+/// Devicetree source validation and simple tree visualization tool.
 #[derive(Parser)]
 struct Args {
+    /// Entrypoint devicetree file
     input_file: std::path::PathBuf,
+    /// Output processing time info before tree
+    #[arg(short = 't', long = "show-time")]
+    show_compile_time: bool,
 }
 
 fn write_report(report: ParseErrorReport, stdout: &mut BufWriter<Stdout>) {
@@ -38,7 +45,9 @@ fn main() {
     }
     stdout.flush().unwrap();
     if !abort {
-        eprintln!("compilation took {:?}", execution_time);
+        if args.show_compile_time {
+            eprintln!("Compilation took {:?}", execution_time);
+        }
         println!("{}", tokens);
     }
 }
