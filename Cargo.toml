@@ -6,3 +6,4 @@ members = ["dtparse", "dtq", "dtview"]
 codegen-units = 1
 lto = "fat"
 panic = "abort"
+strip = true
